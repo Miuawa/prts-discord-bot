@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "discord": {
+      "command": "bun",
+      "args": ["run", "--silent", "src/server.ts"]
+    }
+  }
+}

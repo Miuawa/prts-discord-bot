@@ -1,0 +1,8 @@
+# Template: linux/install.sh fills in @ROOT@.
+[Unit]
+Description=Back up the PRTS roleplay kit (roleplay module)
+
+[Service]
+Type=oneshot
+EnvironmentFile=-@ROOT@/.env
+ExecStart=@ROOT@/modules/roleplay/linux/backup.sh

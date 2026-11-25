@@ -1,0 +1,31 @@
+# Optional local model for the openai-compatible backend (llama.cpp's
+# llama-server). Point PRTS_BASE_URL / RP_BASE_URL at http://<host>:<port>/v1.
+# Template: linux/install.sh fills in @ROOT@ and @LLAMA_SERVER@. The model and
+# flags come from the repo's .env:
+#   LLAMA_MODEL  Hugging Face repo:quant passed to -hf (required)
+#   LLAMA_HOST   bind address (default 127.0.0.1: only this machine)
+#   LLAMA_PORT   port (default 8081)
+#   LLAMA_ARGS   extra flags (context size, GPU layers, ...)
+#
+# Installed in ~/.config/systemd/user, this unit takes the place of the
+# llama-server.service that a distribution's llama.cpp package may ship (that
+# one starts without a model, on another port, so nothing finds it). When
+# LLAMA_HOST is not a loopback address (for example the Docker bridge
+# 172.17.0.1, so containers like OpenWebUI can reach it), the unit first waits
+# up to 2 minutes for that address to exist.
+[Unit]
+Description=llama.cpp server for the PRTS local backend
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=LLAMA_HOST=127.0.0.1 LLAMA_PORT=8081 "LLAMA_ARGS=-c 32768 --parallel 1 -ngl 99"
+EnvironmentFile=-@ROOT@/.env
+ExecStartPre=/bin/sh -c 'case "${LLAMA_HOST}" in 127.*|0.0.0.0|localhost|::1) exit 0;; esac; for i in $$(seq 1 60); do ip -o addr 2>/dev/null | grep -q " ${LLAMA_HOST}/" && exit 0; sleep 2; done; echo "address ${LLAMA_HOST} is not up"; exit 1'
+ExecStart=@LLAMA_SERVER@ -hf ${LLAMA_MODEL} --host ${LLAMA_HOST} --port ${LLAMA_PORT} $LLAMA_ARGS
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=default.target

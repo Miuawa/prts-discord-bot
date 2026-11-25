@@ -1,0 +1,2420 @@
+// PRTS Arknights toolkit: instant slash commands answered by the bot itself
+// (no Claude round trip). Dice and coins, operator cards, tier list, module
+// ratings, farming, recruitment calculator, wiki search, story reader links.
+//
+// Data sources
+// - Game data (EN): ArknightsAssets/ArknightsGamedata on GitHub (character,
+//   module, faction and recruitment tables). Cached to cache/arkdata.json and
+//   refreshed every 3 days in the background.
+// - Timo's story reader (arknights.timo.beer): routes.json for page links.
+// - Fan spreadsheets (AK Tier List, DragonGJY modules, PeterYR farming, RIIC
+//   base guide): pulled live from Google every 6 hours into
+//   <PRTS_DATA_DIR>/sheets/*.txt (created on first run), which are re-read
+//   whenever they change.
+// - Story index (optional): <PRTS_DATA_DIR>/stories.json or PRTS_STORIES_JSON.
+//   Without it, /story only links to the story reader.
+// - arknights.wiki.gg MediaWiki API for /wiki and NPC fallbacks.
+// - Images: myrtle.moe CDN (operator art), yuanyan3060 GitHub mirror (avatars).
+import { EmbedBuilder, MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle, type ChatInputCommandInteraction, type AutocompleteInteraction } from 'discord.js'
+import { readFileSync, writeFileSync, mkdirSync, statSync, existsSync, renameSync, utimesSync } from 'fs'
+import { join } from 'path'
+
+const SHEETS = join(DATA_DIR, 'sheets')
+const STORIES_JSON = process.env.PRTS_STORIES_JSON ?? join(DATA_DIR, 'stories.json')
+import { CACHE_DIR, DATA_DIR } from './paths.ts'
+const CACHE_FILE = join(CACHE_DIR, 'arkdata.json')
+const CACHE_MAX_AGE_MS = 3 * 24 * 3600 * 1000
+const GAMEDATA = 'https://raw.githubusercontent.com/ArknightsAssets/ArknightsGamedata/master/en/gamedata/excel/'
+const TIMO = 'https://arknights.timo.beer'
+const WIKI = 'https://arknights.wiki.gg'
+const MYRTLE = 'https://myrtle.moe'
+const UA = process.env.PRTS_USER_AGENT ?? 'PRTS-Discord-bot/1.0 (unofficial Arknights fan bot)'
+
+const COLOR = { info: 0x23b7e5, ok: 0x3fb950, warn: 0xf2a33a, dim: 0x5c6670 }
+const FOOTER = 'Primitive Rhodes Island Terminal Service'
+const log = (s: string) => process.stderr.write(`prts ark: ${s}\n`)
+
+// ───────────────────────── command definitions ─────────────────────────
+
+// Available everywhere the app is installed (servers, DMs, group DMs).
+const ANYWHERE = { type: 1, integration_types: [0, 1], contexts: [0, 1, 2] }
+const PRIVATE_OPT = { type: 5, name: 'private', description: 'Only you can see the reply', required: false }
+
+export const ARK_COMMANDS = [
+  {
+    name: 'roll',
+    description: 'Roll dice, e.g. 1d20, 2d6+3, 4d6kh3, d%',
+    options: [
+      { type: 3, name: 'dice', description: 'Dice expression (default 1d20)', required: false, max_length: 100 },
+      { type: 3, name: 'reason', description: 'What the roll is for', required: false, max_length: 100 },
+      PRIVATE_OPT,
+    ],
+  },
+  {
+    name: 'coin',
+    description: 'Toss a coin (or several)',
+    options: [
+      { type: 4, name: 'count', description: 'How many coins (default 1, max 100)', required: false, min_value: 1, max_value: 100 },
+      {
+        type: 3,
+        name: 'call',
+        description: 'Call it before the toss',
+        required: false,
+        choices: [
+          { name: 'Heads', value: 'heads' },
+          { name: 'Tails', value: 'tails' },
+        ],
+      },
+      PRIVATE_OPT,
+    ],
+  },
+  {
+    name: 'choose',
+    description: 'PRTS picks one option for you',
+    options: [{ type: 3, name: 'options', description: 'Options separated by | or commas', required: true, max_length: 500 }, PRIVATE_OPT],
+  },
+  {
+    name: 'operator',
+    description: 'Operator card: class, faction, tier, modules, links',
+    options: [{ type: 3, name: 'name', description: 'Operator name', required: true, autocomplete: true, max_length: 60 }, PRIVATE_OPT],
+  },
+  {
+    name: 'tier',
+    description: 'AK Tier List (fan-made, global): show a tier or an operator',
+    options: [
+      {
+        type: 3,
+        name: 'tier',
+        description: 'Tier to list (default: all top tiers)',
+        required: false,
+        choices: ['EX', 'S+', 'S', 'S-', 'A+', 'A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-'].map(t => ({ name: t, value: t })),
+      },
+      {
+        type: 3,
+        name: 'class',
+        description: 'Only this class',
+        required: false,
+        choices: ['Vanguard', 'Guard', 'Defender', 'Sniper', 'Caster', 'Medic', 'Supporter', 'Specialist'].map(c => ({ name: c, value: c })),
+      },
+      { type: 3, name: 'operator', description: 'Look up one operator instead', required: false, autocomplete: true, max_length: 60 },
+      PRIVATE_OPT,
+    ],
+  },
+  {
+    name: 'module',
+    description: 'Module ratings (DragonGJY, fan-made, based on CN)',
+    options: [{ type: 3, name: 'operator', description: 'Operator name', required: true, autocomplete: true, max_length: 60 }, PRIVATE_OPT],
+  },
+  {
+    name: 'farm',
+    description: 'Best stages to farm a material (PeterYR sheet)',
+    options: [{ type: 3, name: 'material', description: 'Material, e.g. Orirock, Device, RMA', required: true, autocomplete: true, max_length: 60 }, PRIVATE_OPT],
+  },
+  {
+    name: 'recruit',
+    description: 'Recruitment calculator: which tag combos guarantee good operators',
+    options: [...[1, 2, 3, 4, 5].map(i => ({ type: 3, name: `tag${i}`, description: `Tag ${i}`, required: i === 1, autocomplete: true, max_length: 40 })), PRIVATE_OPT],
+  },
+  { name: 'wiki', description: 'Search arknights.wiki.gg', options: [{ type: 3, name: 'query', description: 'What to look up', required: true, autocomplete: true, max_length: 150 }, PRIVATE_OPT] },
+  {
+    name: 'story',
+    description: "Find a story chapter or event and link it in Timo's reader",
+    options: [{ type: 3, name: 'query', description: 'Stage code (15-12), title, event name or operator', required: true, max_length: 100 }, PRIVATE_OPT],
+  },
+  {
+    name: 'base',
+    description: 'Base (RIIC) skills and team combos: by operator, team or facility',
+    options: [
+      { type: 3, name: 'operator', description: "An operator's base skills and the teams they fit", required: false, autocomplete: true, max_length: 60 },
+      { type: 3, name: 'team', description: 'A team combo from the RIIC guide', required: false, autocomplete: true, max_length: 100 },
+      {
+        type: 3,
+        name: 'facility',
+        description: 'List the team combos for a facility',
+        required: false,
+        choices: ['Multi-facility', 'Control Center', 'Factory', 'Trading Post'].map(n => ({ name: n, value: n })),
+      },
+      PRIVATE_OPT,
+    ],
+  },
+  {
+    name: 'skin',
+    description: "An operator's outfits: art, artist, how to get it, animated and chibi versions",
+    options: [
+      { type: 3, name: 'operator', description: 'Operator name', required: true, autocomplete: true, max_length: 60 },
+      { type: 3, name: 'outfit', description: 'One outfit to show (default: list them all)', required: false, autocomplete: true, max_length: 100 },
+      PRIVATE_OPT,
+    ],
+  },
+  {
+    name: 'myrtle',
+    description: 'Myrtle.moe player profiles: look up, link your account, roster, leaderboard',
+    options: [
+      {
+        type: 1,
+        name: 'profile',
+        description: "A player's profile card: level, score, rank, supports, roster stats",
+        options: [
+          { type: 3, name: 'player', description: 'Name, Name#1234, UID or myrtle.moe link (default: your linked account)', required: false, autocomplete: true, max_length: 100 },
+          { type: 6, name: 'user', description: 'A Discord user who linked their account', required: false },
+          PRIVATE_OPT,
+        ],
+      },
+      {
+        type: 1,
+        name: 'roster',
+        description: "A player's operators: top builds, or one operator's build",
+        options: [
+          { type: 3, name: 'player', description: 'Name, Name#1234, UID or myrtle.moe link (default: your linked account)', required: false, autocomplete: true, max_length: 100 },
+          { type: 6, name: 'user', description: 'A Discord user who linked their account', required: false },
+          { type: 3, name: 'operator', description: 'Show only this operator', required: false, autocomplete: true, max_length: 60 },
+          {
+            type: 3,
+            name: 'sort',
+            description: 'Order (default: level)',
+            required: false,
+            choices: [
+              { name: 'Level (promotion, then level)', value: 'level' },
+              { name: 'Rarity', value: 'rarity' },
+              { name: 'Masteries', value: 'mastery' },
+              { name: 'Modules', value: 'module' },
+              { name: 'Most recently obtained', value: 'recent' },
+            ],
+          },
+          { type: 4, name: 'rarity', description: 'Only this rarity', required: false, min_value: 1, max_value: 6 },
+          {
+            type: 3,
+            name: 'class',
+            description: 'Only this class',
+            required: false,
+            choices: ['Vanguard', 'Guard', 'Defender', 'Sniper', 'Caster', 'Medic', 'Supporter', 'Specialist'].map(c => ({ name: c, value: c })),
+          },
+          PRIVATE_OPT,
+        ],
+      },
+      {
+        type: 1,
+        name: 'pulls',
+        description: "A player's public headhunting history: pity, 6★ and 5★ pulls, rates",
+        options: [
+          { type: 3, name: 'player', description: 'Name, Name#1234, UID or myrtle.moe link (default: your linked account)', required: false, autocomplete: true, max_length: 100 },
+          { type: 6, name: 'user', description: 'A Discord user who linked their account', required: false },
+          {
+            type: 3,
+            name: 'banner',
+            description: 'Only this banner type (default: all)',
+            required: false,
+            choices: [
+              { name: 'Limited', value: 'limited' },
+              { name: 'Standard', value: 'standard' },
+              { name: 'Kernel', value: 'kernel' },
+              { name: 'Beginner', value: 'beginner' },
+            ],
+          },
+          PRIVATE_OPT,
+        ],
+      },
+      {
+        type: 1,
+        name: 'inventory',
+        description: "A player's public item inventory: materials, chips, tickets",
+        options: [
+          { type: 3, name: 'player', description: 'Name, Name#1234, UID or myrtle.moe link (default: your linked account)', required: false, autocomplete: true, max_length: 100 },
+          { type: 6, name: 'user', description: 'A Discord user who linked their account', required: false },
+          { type: 3, name: 'item', description: 'Only items whose name contains this', required: false, max_length: 60 },
+          PRIVATE_OPT,
+        ],
+      },
+      {
+        type: 1,
+        name: 'lookback',
+        description: "A player's progress snapshots over time (operators, E2, masteries, modules, score)",
+        options: [
+          { type: 3, name: 'player', description: 'Name, Name#1234, UID or myrtle.moe link (default: your linked account)', required: false, autocomplete: true, max_length: 100 },
+          { type: 6, name: 'user', description: 'A Discord user who linked their account', required: false },
+          PRIVATE_OPT,
+        ],
+      },
+      {
+        type: 1,
+        name: 'showcase',
+        description: "A player's profile showcase: favourite operators, enemies, outfits, tier lists",
+        options: [
+          { type: 3, name: 'player', description: 'Name, Name#1234, UID or myrtle.moe link (default: your linked account)', required: false, autocomplete: true, max_length: 100 },
+          { type: 6, name: 'user', description: 'A Discord user who linked their account', required: false },
+          PRIVATE_OPT,
+        ],
+      },
+      {
+        type: 1,
+        name: 'enemies',
+        description: "A player's enemy handbook progress",
+        options: [
+          { type: 3, name: 'player', description: 'Name, Name#1234, UID or myrtle.moe link (default: your linked account)', required: false, autocomplete: true, max_length: 100 },
+          { type: 6, name: 'user', description: 'A Discord user who linked their account', required: false },
+          { type: 3, name: 'enemy', description: 'Check whether they have met enemies whose name contains this', required: false, max_length: 60 },
+          PRIVATE_OPT,
+        ],
+      },
+      {
+        type: 1,
+        name: 'plans',
+        description: "A player's public operator plans",
+        options: [
+          { type: 3, name: 'player', description: 'Name, Name#1234, UID or myrtle.moe link (default: your linked account)', required: false, autocomplete: true, max_length: 100 },
+          { type: 6, name: 'user', description: 'A Discord user who linked their account', required: false },
+          PRIVATE_OPT,
+        ],
+      },
+      {
+        type: 1,
+        name: 'search',
+        description: 'Find Myrtle players by in-game name',
+        options: [{ type: 3, name: 'name', description: 'In-game name (part of it is fine)', required: true, max_length: 60 }, PRIVATE_OPT],
+      },
+      {
+        type: 1,
+        name: 'leaderboard',
+        description: 'Myrtle account score leaderboard',
+        options: [
+          {
+            type: 3,
+            name: 'sort',
+            description: 'Category (default: total)',
+            required: false,
+            choices: Object.entries({
+              total_score: 'Total',
+              operator_score: 'Operators',
+              stage_score: 'Stages',
+              roguelike_score: 'Integrated Strategies',
+              sandbox_score: 'Reclamation Algorithm',
+              medal_score: 'Medals',
+              base_score: 'Base (RIIC)',
+            }).map(([value, name]) => ({ name, value })),
+          },
+          { type: 3, name: 'server', description: 'Only this server', required: false, choices: ['EN', 'JP', 'KR'].map(s => ({ name: s, value: s })) },
+          PRIVATE_OPT,
+        ],
+      },
+      {
+        type: 1,
+        name: 'link',
+        description: 'Link your Discord account to your Myrtle profile',
+        options: [{ type: 3, name: 'player', description: 'Your name#1234, UID or myrtle.moe link', required: true, autocomplete: true, max_length: 100 }],
+      },
+      { type: 1, name: 'unlink', description: 'Remove the link to your Myrtle profile', options: [] },
+    ],
+  },
+  { name: 'links', description: 'Useful Arknights sites and tools', options: [PRIVATE_OPT] },
+  {
+    name: 'help',
+    description: 'All commands, what they do and how to use them',
+    options: [{ type: 3, name: 'command', description: 'Show details and examples for one command', required: false, choices: [] as { name: string; value: string }[] }, PRIVATE_OPT],
+  },
+].map(c => ({ ...ANYWHERE, ...c }))
+
+export const ARK_COMMAND_NAMES = new Set(ARK_COMMANDS.map(c => c.name))
+
+// ───────────────────────── game data ─────────────────────────
+
+const CLASS: Record<string, string> = {
+  PIONEER: 'Vanguard',
+  WARRIOR: 'Guard',
+  TANK: 'Defender',
+  SNIPER: 'Sniper',
+  CASTER: 'Caster',
+  MEDIC: 'Medic',
+  SUPPORT: 'Supporter',
+  SPECIAL: 'Specialist',
+}
+
+type Op = {
+  id: string
+  name: string
+  rarity: number
+  cls: string
+  branch: string
+  faction: string
+  pos: string
+  tags: string[]
+  usage: string
+  desc: string
+  modules: { name: string; type: string; id?: string }[]
+  recruit: boolean
+  base: { name: string; room: string; unlock: string; desc: string }[]
+}
+const DATA_VERSION = 3
+type ArkData = {
+  version: number
+  builtAt: number
+  ops: Op[]
+  recruitTags: string[]
+  timoGroups: Record<string, string>
+  timoOps: Record<string, string>
+}
+
+let data: ArkData | null = null
+let building: Promise<void> | null = null
+
+async function getJson(url: string): Promise<any> {
+  // A hung download would keep `building` set forever and block every refresh.
+  const r = await fetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(180_000) })
+  if (!r.ok) throw new Error(`${r.status} ${url}`)
+  return r.json()
+}
+
+const stripRich = (s: string) =>
+  (s ?? '')
+    .replace(/<[@$/][^>]*>|<\/>/g, '')
+    .replace(/\\n/g, ' ')
+    .trim()
+export const normName = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/ł/g, 'l')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[‘’'"`·.\-–]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+async function buildData(): Promise<void> {
+  log('building game data cache...')
+  const [chars, equip, teams, gacha, routes, building] = await Promise.all([
+    getJson(GAMEDATA + 'character_table.json'),
+    getJson(GAMEDATA + 'uniequip_table.json'),
+    getJson(GAMEDATA + 'handbook_team_table.json'),
+    getJson(GAMEDATA + 'gacha_table.json'),
+    getJson(TIMO + '/json/routes.json').catch(() => ({ groups: {}, ops: {} })),
+    getJson(GAMEDATA + 'building_data.json').catch(() => ({ chars: {}, buffs: {} })),
+  ])
+  const ROOM: Record<string, string> = {
+    CONTROL: 'Control Center',
+    MANUFACTURE: 'Factory',
+    TRADING: 'Trading Post',
+    POWER: 'Power Plant',
+    MEETING: 'Reception Room',
+    WORKSHOP: 'Workshop',
+    HIRE: 'Office',
+    TRAINING: 'Training Room',
+    DORMITORY: 'Dormitory',
+  }
+  const baseOf = (id: string) => {
+    const out: Op['base'] = []
+    const slots = building.chars?.[id]?.buffChar
+    for (const slot of Array.isArray(slots) ? slots : [])
+      for (const b of Array.isArray(slot?.buffData) ? slot.buffData : []) {
+        const buff = building.buffs?.[b.buffId]
+        if (!buff) continue
+        const ph = /PHASE_(\d)/.exec(b.cond?.phase ?? '')?.[1] ?? '0'
+        const lv = b.cond?.level > 1 ? ` Lv${b.cond.level}` : ''
+        out.push({ name: buff.buffName, room: ROOM[buff.roomType] ?? buff.roomType, unlock: `E${ph}${lv}`, desc: stripRich(buff.description) })
+      }
+    return out
+  }
+  const sub = equip.subProfDict ?? {}
+  const modsByChar: Record<string, { name: string; type: string; id?: string }[]> = {}
+  for (const e of Object.values<any>(equip.equipDict ?? {})) {
+    if (!e.charId || e.typeName1 === 'ORIGINAL') continue
+    ;(modsByChar[e.charId] ??= []).push({ name: e.uniEquipName, type: `${e.typeName1}-${e.typeName2}`, id: e.uniEquipId })
+  }
+  // Recruitable pool, from the in-game "All Possible Operators" text.
+  const pool = new Set<string>()
+  for (const line of String(gacha.recruitDetail ?? '').split('\n')) {
+    if (!line.includes(' / ') && !line.includes('<@rc.eml>')) continue
+    if (line.includes('Operators displayed')) continue
+    for (const n of stripRich(line).split(' / ')) if (n.trim()) pool.add(normName(n))
+  }
+  const ops: Op[] = []
+  for (const [id, c] of Object.entries<any>(chars)) {
+    if (!id.startsWith('char_') || c.isNotObtainable || !CLASS[c.profession]) continue
+    const rarity = typeof c.rarity === 'number' ? c.rarity + 1 : parseInt(String(c.rarity).replace(/\D/g, ''), 10) || 0
+    const fac = c.teamId || c.groupId || c.nationId
+    ops.push({
+      id,
+      name: c.name,
+      rarity,
+      cls: CLASS[c.profession],
+      branch: sub[c.subProfessionId]?.subProfessionName ?? c.subProfessionId,
+      faction: teams[fac]?.powerName ?? fac ?? '',
+      pos: c.position === 'MELEE' ? 'Melee' : c.position === 'RANGED' ? 'Ranged' : '',
+      tags: c.tagList ?? [],
+      usage: stripRich(c.itemUsage),
+      desc: stripRich(c.itemDesc),
+      modules: modsByChar[id] ?? [],
+      recruit: pool.has(normName(c.name)),
+      base: baseOf(id),
+    })
+  }
+  data = {
+    version: DATA_VERSION,
+    builtAt: Date.now(),
+    ops,
+    recruitTags: (gacha.gachaTags ?? []).map((t: any) => t.tagName).filter((t: string) => t && !/^(Male|Female)$/.test(t)),
+    timoGroups: routes.groups ?? {},
+    timoOps: routes.ops ?? {},
+  }
+  mkdirSync(CACHE_DIR, { recursive: true })
+  writeFileSync(CACHE_FILE, JSON.stringify(data))
+  log(`game data cached: ${ops.length} operators, ${pool.size} recruitable`)
+}
+
+function ensureData(): void {
+  if (!data && existsSync(CACHE_FILE)) {
+    try {
+      data = JSON.parse(readFileSync(CACHE_FILE, 'utf8'))
+    } catch {
+      data = null
+    }
+  }
+  if ((!data || data.version !== DATA_VERSION || Date.now() - data.builtAt > CACHE_MAX_AGE_MS) && !building) {
+    building = buildData()
+      .catch(e => {
+        log(`data build failed: ${e}`)
+      })
+      .finally(() => {
+        building = null
+      })
+  }
+}
+ensureData()
+setInterval(ensureData, 6 * 3600 * 1000).unref()
+
+// Lookups by id and by normalized name, rebuilt whenever `data` is replaced.
+// Autocomplete runs findOps on every keystroke, so names are normalized once.
+let index: { of: ArkData; byId: Map<string, Op>; byKey: Map<string, Op>; keyed: [string, Op][]; top: Op[] } | null = null
+function opIndex() {
+  if (!data) return null
+  if (index?.of !== data) {
+    const keyed = data.ops.map(o => [normName(o.name), o] as [string, Op])
+    index = {
+      of: data,
+      keyed,
+      byId: new Map(data.ops.map(o => [o.id, o])),
+      byKey: new Map(keyed.slice().reverse()), // first operator wins on duplicate names, like find()
+      top: data.ops.slice().sort((a, b) => b.rarity - a.rarity || a.name.localeCompare(b.name)),
+    }
+  }
+  return index
+}
+
+export function findOps(q: string, limit = 25): Op[] {
+  const ix = opIndex()
+  if (!ix) return []
+  const n = normName(q)
+  if (!n) return ix.top.slice(0, limit)
+  const scored: [number, Op][] = []
+  for (const [on, o] of ix.keyed) {
+    const s = on === n ? 0 : on.startsWith(n) ? 1 : on.split(' ').some(w => w.startsWith(n)) ? 2 : on.includes(n) ? 3 : -1
+    if (s >= 0) scored.push([s, o])
+  }
+  return scored
+    .sort((a, b) => a[0] - b[0] || a[1].name.length - b[1].name.length)
+    .slice(0, limit)
+    .map(x => x[1])
+}
+
+// ───────────────────────── spreadsheets ─────────────────────────
+// The community sheets change often, so the bot pulls them live from Google
+// every 6 hours (per-tab CSV export, no images) and rewrites the local .txt
+// copies in the data folder. The saved copy is the fallback when Google fails.
+// The first run creates each file from the tab list below.
+
+const SHEET_SOURCES: { file: string; id: string; tabs: string[] }[] = [
+  {
+    file: 'tier-list-aktierlist.txt',
+    id: '1E7HmgKWiV8pKpJpvpVzziYxnaQTP01Vtw_PXEdL7XPA',
+    tabs: [
+      'Introduction',
+      'The Tier List',
+      'The Tier List - Large Size',
+      'Newest Additions - Updated Octo',
+      'Revisions',
+      'Log',
+      'The Tier List - Compressed',
+      'Vanguards by Archetype',
+      'Vanguards Template',
+      'Guards Template',
+      'Defenders Template',
+      'Snipers Template',
+      'Casters Template',
+      'Medics Template',
+      'Supporters Template',
+      'Specialists Template',
+    ],
+  },
+  { file: 'module-ratings-dragongjy.txt', id: '1A0_0XTAcDDtHkvyAwjTqEEzM8cf5h3E60u23ZVXw4eg', tabs: ['Module Ratings', 'Lower Rarities Modules', 'Changelog'] },
+  {
+    file: 'peteryr-farming.txt',
+    id: '1RRiTIYVUNUf-xW8ljAJdYEOuSo23lpjHkPa0-zuC_4k',
+    tabs: [
+      'Farming Summary',
+      'About',
+      'Changelog',
+      '• Rock',
+      '• Sugar',
+      '• Ester',
+      '• Oriron',
+      '• Keton',
+      '• Device',
+      '• Kohl',
+      '• Manganese',
+      '• Grindstone',
+      '• RMA',
+      '• Gel',
+      '• Alloy',
+      '• Crystal',
+      '• Solvent',
+      '• Fluid',
+      '• Salt',
+      '• Fiber',
+      '• Cyclicene',
+      '• Nodule',
+      '• CN Gas Thing',
+      '• CN Power Thing',
+      'Data',
+      'import',
+    ],
+  },
+  {
+    file: 'riic-base-skills.txt',
+    id: '1zYc2JU46X0XWmV7s1503bN4feRdOMa1eehrTQ2jGaiE',
+    tabs: ['MAIN', 'INFO', 'QOL', 'NEW', 'NOOB', 'SPECIAL', 'CC', 'FAC', 'TP', 'PP', 'RR', 'WS', 'HR', 'TR', 'RS', 'DORM', 'BIN', 'op', 'riicdetails'],
+  },
+]
+const SHEET_REFRESH_MS = 6 * 3600 * 1000
+
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = []
+  let row: string[] = [],
+    cell = '',
+    q = false
+  for (let k = 0; k < text.length; k++) {
+    const ch = text[k]
+    if (q) {
+      if (ch === '"') {
+        if (text[k + 1] === '"') {
+          cell += '"'
+          k++
+        } else q = false
+      } else cell += ch
+    } else if (ch === '"') q = true
+    else if (ch === ',') {
+      row.push(cell)
+      cell = ''
+    } else if (ch === '\n') {
+      row.push(cell)
+      rows.push(row)
+      row = []
+      cell = ''
+    } else if (ch !== '\r') cell += ch
+  }
+  if (cell || row.length) {
+    row.push(cell)
+    rows.push(row)
+  }
+  return rows
+}
+
+async function fetchTab(id: string, tab: string): Promise<string[]> {
+  const u = `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&headers=0&sheet=${encodeURIComponent(tab)}`
+  const r = await fetch(u, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(60_000) })
+  if (!r.ok) throw new Error(`${r.status}`)
+  const t = await r.text()
+  if (t.trimStart().startsWith('<')) throw new Error('not CSV (sheet private or tab missing)')
+  return parseCsv(t)
+    .map(row =>
+      row
+        .map(c => c.trim().replace(/\s*\n\s*/g, ' '))
+        .filter(Boolean)
+        .join(' | '),
+    )
+    .filter(Boolean)
+}
+
+async function refreshSheet(src: { file: string; id: string; tabs: string[] }): Promise<void> {
+  const path = join(SHEETS, src.file)
+  mkdirSync(SHEETS, { recursive: true })
+  const old = existsSync(path) ? readFileSync(path, 'utf8') : src.tabs.map(t => `=== SHEET: ${t}`).join('\n')
+  const tabs: { name: string; lines: string[] }[] = []
+  for (const line of old.split(/\r?\n/)) {
+    const m = /^=== SHEET: (.*)$/.exec(line)
+    if (m) tabs.push({ name: m[1].trim(), lines: [] })
+    else if (tabs.length && line.trim()) tabs[tabs.length - 1].lines.push(line)
+  }
+  if (!tabs.length) return
+  // An unknown tab name makes Google return the first tab, so compare to it.
+  const first = await fetchTab(src.id, tabs[0].name)
+  let changed = 0
+  for (const [n, tab] of tabs.entries()) {
+    try {
+      const lines = n === 0 ? first : await fetchTab(src.id, tab.name)
+      if (!lines.length || (n > 0 && lines.join('\n') === first.join('\n'))) continue
+      if (lines.join('\n') !== tab.lines.join('\n')) {
+        tab.lines = lines
+        changed++
+      }
+    } catch (e) {
+      log(`sheet ${src.file} tab "${tab.name}": ${e}`)
+    }
+  }
+  if (changed) {
+    writeFileSync(path + '.tmp', tabs.map(t => `\n=== SHEET: ${t.name}\n${t.lines.join('\n')}\n`).join(''))
+    renameSync(path + '.tmp', path)
+  } else utimesSync(path, new Date(), new Date()) // mark as checked
+  log(`sheet ${src.file}: ${changed} tab(s) updated`)
+}
+
+let refreshing = false
+export async function refreshSheets(): Promise<void> {
+  if (refreshing) return
+  refreshing = true
+  try {
+    for (const s of SHEET_SOURCES) await refreshSheet(s).catch(e => log(`sheet ${s.file}: ${e}`))
+  } finally {
+    refreshing = false
+  }
+}
+if (process.env.PRTS_NO_SHEET_REFRESH !== '1') {
+  setTimeout(() => void refreshSheets(), 20_000).unref()
+  setInterval(() => void refreshSheets(), SHEET_REFRESH_MS).unref()
+}
+
+type Sheets = {
+  mtime: number
+  tiers: { tier: string; names: string[] }[]
+  tierOf: Map<string, string[]> // normName(base name) -> tier labels with notes
+  classOf: Map<string, string>
+  modules: Map<string, string[][]> // normName(op) -> rows
+  farm: Map<string, { label: string; rows: [string, number, number][] }>
+  teams: { title: string; facility: string; members: string; desc: string; effect: string; tokens: Set<string> }[]
+  notes: Map<string, { facilities: string; text: string; partners: string }>
+}
+let sheets: Sheets | null = null
+
+const TIER_RE = /^(EX|S\+|S|S-|A\+|A|A-|B\+|B|B-|C\+|C|C-|D\+|D|D-)$/
+const RIIC_FACILITY: Record<string, string> = {
+  SPECIAL: 'Multi-facility',
+  CC: 'Control Center',
+  FAC: 'Factory',
+  TP: 'Trading Post',
+  PP: 'Power Plant',
+  RR: 'Reception Room',
+  WS: 'Workshop',
+  HR: 'Office',
+  TR: 'Training Room',
+  DORM: 'Dormitory',
+  NOOB: 'Beginner',
+}
+const RIIC_URL = 'https://docs.google.com/spreadsheets/d/1zYc2JU46X0XWmV7s1503bN4feRdOMa1eehrTQ2jGaiE/edit'
+const FARM_ALIAS: Record<string, string> = {
+  Rock: 'Orirock',
+  Ester: 'Polyester',
+  Keton: 'Polyketon',
+  Kohl: 'Loxic Kohl',
+  Manganese: 'Manganese Ore',
+  RMA: 'RMA70-12',
+  Gel: 'Coagulating Gel',
+  Alloy: 'Incandescent Alloy',
+  Crystal: 'Crystalline Component',
+  Solvent: 'Semi-Synthetic Solvent',
+  Fluid: 'Compound Cutting Fluid',
+  Salt: 'Transmuted Salt',
+  Fiber: 'Fuscous Fiber',
+}
+
+function readSheetTabs(file: string): Map<string, string[]> {
+  const tabs = new Map<string, string[]>()
+  let cur: string[] | null = null
+  for (const line of readFileSync(join(SHEETS, file), 'utf8').split(/\r?\n/)) {
+    const m = /^=== SHEET: (.*)$/.exec(line)
+    if (m) {
+      cur = []
+      tabs.set(m[1].trim(), cur)
+      continue
+    }
+    if (cur && line.trim()) cur.push(line)
+  }
+  return tabs
+}
+
+const baseOpName = (s: string) => normName(s.replace(/\s*\([^)]*\)\s*$/, ''))
+
+function loadSheets(): Sheets | null {
+  const files = ['tier-list-aktierlist.txt', 'module-ratings-dragongjy.txt', 'peteryr-farming.txt', 'riic-base-skills.txt']
+  let mtime = 0
+  try {
+    for (const f of files) mtime = Math.max(mtime, statSync(join(SHEETS, f)).mtimeMs)
+  } catch {
+    return sheets
+  }
+  if (sheets && sheets.mtime === mtime) return sheets
+  const s: Sheets = { mtime, tiers: [], tierOf: new Map(), classOf: new Map(), modules: new Map(), farm: new Map(), teams: [], notes: new Map() }
+  try {
+    const tl = readSheetTabs(files[0])
+    let cur: { tier: string; names: string[] } | null = null
+    for (const line of tl.get('The Tier List') ?? []) {
+      const t = line.trim()
+      if (TIER_RE.test(t)) {
+        cur = { tier: t, names: [] }
+        s.tiers.push(cur)
+        continue
+      }
+      if (!cur) continue
+      for (const n of t
+        .split(' | ')
+        .map(x => x.trim())
+        .filter(Boolean)) {
+        cur.names.push(n)
+        const note = /\(([^)]*)\)\s*$/.exec(n)?.[1]
+        const k = baseOpName(n)
+        s.tierOf.set(k, [...(s.tierOf.get(k) ?? []), note ? `${cur.tier} (${note})` : cur.tier])
+      }
+    }
+    for (const [tab, lines] of tl) {
+      const m = /^(\w+?)s? Template$/.exec(tab)
+      if (!m) continue
+      const cls = m[1]
+      for (const line of lines.slice(1)) if (!TIER_RE.test(line.trim())) for (const n of line.split(' | ')) if (n.trim()) s.classOf.set(baseOpName(n), cls)
+    }
+  } catch (e) {
+    log(`tier sheet: ${e}`)
+  }
+  try {
+    const mr = readSheetTabs(files[1])
+    for (const tab of ['Module Ratings', 'Lower Rarities Modules']) {
+      for (const line of mr.get(tab) ?? []) {
+        const f = line.split(' | ')
+        if (f.length < 10 || f[0] === 'Operator') continue
+        const k = normName(f[0])
+        s.modules.set(k, [...(s.modules.get(k) ?? []), f])
+      }
+    }
+  } catch (e) {
+    log(`module sheet: ${e}`)
+  }
+  try {
+    const fm = readSheetTabs(files[2])
+    for (const [tab, lines] of fm) {
+      if (!tab.startsWith('• ')) continue
+      const key = tab.slice(2).trim()
+      const rows: [string, number, number][] = []
+      for (const line of lines) {
+        const f = line.split(' | ')
+        const num = (x?: string) => (x == null ? NaN : x.trim().endsWith('%') ? parseFloat(x) / 100 : parseFloat(x))
+        const eff = num(f[1])
+        const drop = num(f[2])
+        if (f.length >= 2 && /^[A-Z0-9]/.test(f[0]) && !isNaN(eff) && f[0] !== 'Stage') rows.push([f[0], eff, isNaN(drop) ? NaN : drop])
+      }
+      const label = FARM_ALIAS[key] ? `${FARM_ALIAS[key]} (${key})` : key
+      if (rows.length) s.farm.set(key, { label, rows })
+    }
+  } catch (e) {
+    log(`farm sheet: ${e}`)
+  }
+  try {
+    const rb = readSheetTabs(files[3])
+    for (const [tab, lines] of rb) {
+      const facility = RIIC_FACILITY[tab]
+      if (!facility) continue
+      const starts: number[] = []
+      lines.forEach((l, k) => {
+        if (l.includes('| EFFECT: |') && k > 0) starts.push(k - 1)
+      })
+      starts.forEach((st, n) => {
+        const block = lines.slice(st, starts[n + 1] ?? lines.length)
+        const [d, eff = ''] = block[1].split('| EFFECT: |')
+        const members = block[2]?.startsWith('(') ? block[2].replace(/^\(|\)$/g, '') : ''
+        const tokens = new Set<string>()
+        for (const l of block) for (const t of l.split(/\s*(?:\||\+|,|\(|\))\s*/)) if (t) tokens.add(normName(t))
+        s.teams.push({ title: block[0].trim(), facility, members, desc: d.trim(), effect: eff.replace(/\s*\|\s*/g, ' ').trim(), tokens })
+      })
+    }
+    for (const tab of ['NEW', 'BIN']) {
+      const lines = rb.get(tab) ?? []
+      for (let k = 1; k + 1 < lines.length; k++) {
+        if (!lines[k].includes('| PERSONAL THOUGHTS')) continue
+        const key = normName(lines[k - 1])
+        if (s.notes.has(key)) continue
+        const [text, ...partners] = lines[k + 1].split(' | ')
+        s.notes.set(key, { facilities: lines[k].split(' | PERSONAL')[0], text: text.trim(), partners: partners.join(', ') })
+      }
+    }
+  } catch (e) {
+    log(`riic sheet: ${e}`)
+  }
+  sheets = s
+  return s
+}
+
+function sheetDate(file: string): string {
+  try {
+    return new Date(statSync(join(SHEETS, file)).mtimeMs).toISOString().slice(0, 10)
+  } catch {
+    return 'unknown'
+  }
+}
+
+// ───────────────────────── helpers ─────────────────────────
+
+const stars = (n: number) => '★'.repeat(n)
+const wikiUrl = (title: string) => `${WIKI}/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}`
+const randInt = (n: number) => {
+  const buf = new Uint32Array(1)
+  const lim = Math.floor(0x100000000 / n) * n
+  do crypto.getRandomValues(buf)
+  while (buf[0] >= lim)
+  return buf[0] % n
+}
+const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s)
+const ephFlag = (on: boolean): MessageFlags.Ephemeral | undefined => (on ? MessageFlags.Ephemeral : undefined)
+
+function embed(title?: string): EmbedBuilder {
+  const e = new EmbedBuilder().setColor(COLOR.info).setFooter({ text: FOOTER })
+  if (title) e.setTitle(title)
+  return e
+}
+
+async function notReady(i: ChatInputCommandInteraction, eph: boolean) {
+  await i.reply({
+    embeds: [
+      embed('Records loading')
+        .setColor(COLOR.warn)
+        .setDescription('Operator records are being downloaded from the game data archive. Estimated time: under 60 seconds. Please try again shortly. I apologize for the delay.'),
+    ],
+    flags: ephFlag(eph),
+  })
+}
+
+// ───────────────────────── /roll /coin /choose ─────────────────────────
+
+function rollDice(expr: string): { text: string; total: number } | string {
+  const src = expr.replace(/\s+/g, '').toLowerCase() || '1d20'
+  const re = /([+-]?)(?:(\d*)d(\d+|%)(?:(kh|kl)(\d+))?|(\d+))/gy
+  let pos = 0,
+    total = 0,
+    dice = 0
+  const parts: string[] = []
+  while (pos < src.length) {
+    re.lastIndex = pos
+    const m = re.exec(src)
+    if (!m || m[0] === '' || (pos > 0 && !m[1])) return 'Unable to parse the dice expression. Examples: 1d20, 2d6+3, 4d6kh3, d%.'
+    pos = re.lastIndex
+    const sign = m[1] === '-' ? -1 : 1
+    if (m[6] !== undefined) {
+      total += sign * parseInt(m[6], 10)
+      parts.push(`${sign < 0 ? '−' : parts.length ? '+' : ''} ${m[6]}`)
+      continue
+    }
+    const count = m[2] ? parseInt(m[2], 10) : 1
+    const sides = m[3] === '%' ? 100 : parseInt(m[3], 10)
+    dice += count
+    if (count < 1 || sides < 2 || sides > 10000 || dice > 100) return 'Request exceeds limits: at most 100 dice, 2 to 10000 sides each.'
+    const rolls = Array.from({ length: count }, () => randInt(sides) + 1)
+    let kept = rolls.map((_, idx) => idx)
+    if (m[4]) {
+      const k = Math.min(parseInt(m[5], 10), count)
+      kept = kept.sort((a, b) => (m[4] === 'kh' ? rolls[b] - rolls[a] : rolls[a] - rolls[b])).slice(0, k)
+    }
+    const keep = new Set(kept)
+    const sum = rolls.reduce((acc, r, idx) => acc + (keep.has(idx) ? r : 0), 0)
+    total += sign * sum
+    const shown = rolls
+      .map((r, idx) => {
+        const t = keep.has(idx) ? String(r) : `~~${r}~~`
+        return r === sides && keep.has(idx) ? `**${t}**` : t
+      })
+      .join(', ')
+    parts.push(`${sign < 0 ? '−' : parts.length ? '+' : ''} ${count}d${m[3]}${m[4] ? m[4] + m[5] : ''} [${shown}]`)
+  }
+  return { text: parts.join(' ').trim(), total }
+}
+
+async function cmdRoll(i: ChatInputCommandInteraction, eph: boolean) {
+  const expr = i.options.getString('dice') ?? '1d20'
+  const reason = i.options.getString('reason')
+  const r = rollDice(expr)
+  if (typeof r === 'string') return i.reply({ content: `[PRTS] ${r}`, flags: MessageFlags.Ephemeral })
+  const e = embed(`🎲 ${reason ? clip(reason, 200) : 'Dice roll'}`).setDescription(`\`${expr}\`\n${clip(r.text, 3500)}\n\nResult: **${r.total}**`)
+  return i.reply({ embeds: [e], flags: ephFlag(eph) })
+}
+
+async function cmdCoin(i: ChatInputCommandInteraction, eph: boolean) {
+  const n = i.options.getInteger('count') ?? 1
+  const call = i.options.getString('call')
+  const flips = Array.from({ length: n }, () => (randInt(2) ? 'Heads' : 'Tails'))
+  const heads = flips.filter(f => f === 'Heads').length
+  let desc: string
+  if (n === 1) {
+    desc = `The coin lands on **${flips[0]}**.`
+    if (call) desc += flips[0].toLowerCase() === call ? '\nYour call was correct. Congratulations.' : '\nYour call was incorrect. I apologize on behalf of probability.'
+  } else {
+    desc = `${flips.map(f => (f === 'Heads' ? 'H' : 'T')).join(' ')}\n\nHeads: **${heads}** · Tails: **${n - heads}** (${((heads / n) * 100).toFixed(1)}% heads)`
+    if (call) desc += `\nYour call (${call}) was correct ${call === 'heads' ? heads : n - heads} of ${n} times.`
+  }
+  return i.reply({ embeds: [embed(`🪙 Coin toss${n > 1 ? ` ×${n}` : ''}`).setDescription(desc)], flags: ephFlag(eph) })
+}
+
+async function cmdChoose(i: ChatInputCommandInteraction, eph: boolean) {
+  const raw = i.options.getString('options', true)
+  const opts = raw
+    .split(raw.includes('|') ? '|' : ',')
+    .map(s => s.trim())
+    .filter(Boolean)
+  if (opts.length < 2) return i.reply({ content: '[PRTS] Please provide at least two options, separated by | or commas.', flags: MessageFlags.Ephemeral })
+  const pick = opts[randInt(opts.length)]
+  const e = embed('Decision support').setDescription(
+    `Options evaluated: ${opts.length}. Probability for each option: ${(100 / opts.length).toFixed(2)}%.\n\nSelected, without hesitation: **${clip(pick, 500)}**`,
+  )
+  return i.reply({ embeds: [e], flags: ephFlag(eph) })
+}
+
+// ───────────────────────── /operator ─────────────────────────
+
+function opLinks(o: Op): string {
+  const links = [`[Wiki](${wikiUrl(o.name)})`, `[Myrtle](${MYRTLE}/operators/${o.id})`]
+  const slug = data?.timoOps[o.id]
+  if (slug) links.push(`[Story records](${TIMO}/operators/${slug})`, `[Voice lines](${TIMO}/voices/${slug})`)
+  return links.join(' · ')
+}
+
+function tierText(o: Op, sh: Sheets | null): string | null {
+  const t = sh?.tierOf.get(normName(o.name))
+  return t?.length ? t.join(', ') : null
+}
+
+async function cmdOperator(i: ChatInputCommandInteraction, eph: boolean) {
+  ensureData()
+  const q = i.options.getString('name', true)
+  if (!data) return notReady(i, eph)
+  const o = findOps(q, 1)[0]
+  if (!o) {
+    // Not an operator: maybe an NPC. Fall back to the wiki.
+    await i.deferReply({ flags: ephFlag(eph) })
+    const w = await wikiLookup(q).catch(() => null)
+    if (!w) return i.editReply({ content: `[PRTS] No operator or wiki record matches "${clip(q, 60)}". Please check the spelling.` })
+    return i.editReply({ embeds: [w.setAuthor({ name: 'No operator file found · Wiki record' })] })
+  }
+  const sh = loadSheets()
+  const e = embed(o.name)
+    .setURL(wikiUrl(o.name))
+    .setDescription(
+      [`${stars(o.rarity)} · **${o.cls}** (${o.branch}) · ${o.pos}`, o.faction ? `Affiliation: ${o.faction}` : '', '', o.usage ? `*${clip(o.usage, 300)}*` : '', o.desc ? `> ${clip(o.desc, 200)}` : '']
+        .filter((x, idx) => x !== '' || idx === 2)
+        .join('\n'),
+    )
+    .setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${o.id}.png`)
+    .setImage(`https://assets.eltik.net/myrtle/en/textures/chararts/${o.id}/${o.id}_${o.rarity >= 3 ? 2 : 1}.png`)
+  const tier = tierText(o, sh)
+  e.addFields({ name: 'Tier (AK Tier List)', value: tier ?? 'Not listed', inline: true })
+  e.addFields({ name: 'Recruitment', value: o.recruit ? 'Available' : 'Headhunting/other only', inline: true })
+  if (o.tags.length) e.addFields({ name: 'Tags', value: o.tags.join(', '), inline: true })
+  const rated = sh?.modules.get(normName(o.name)) ?? []
+  if (o.modules.length || rated.length) {
+    const lines = o.modules.map(m => {
+      const r = rated.find(row => m.type.endsWith('-' + row[2].trim()))
+      return `**${m.type}** ${m.name}${r ? ` · MR ${r[4]} / IC ${r[5]} · ${r[6]}` : ''}`
+    })
+    e.addFields({ name: 'Modules', value: clip(lines.join('\n') || rated.map(r => `${r[2]}: MR ${r[4]}`).join('\n'), 1024) })
+  }
+  e.addFields({ name: 'Links', value: opLinks(o) })
+  e.setFooter({ text: `${FOOTER} · Tier/module ratings are fan-made community sheets` })
+  return i.reply({ embeds: [e], flags: ephFlag(eph) })
+}
+
+// ───────────────────────── /tier ─────────────────────────
+
+// Class from game data (reliable); the sheet's class templates as fallback.
+function classOfName(n: string, sh: Sheets): string | undefined {
+  const k = baseOpName(n)
+  const o = opIndex()?.byKey.get(k)
+  if (o) return o.cls
+  if (/^amiya/.test(k) && /medic/i.test(n)) return 'Medic'
+  return sh.classOf.get(k)
+}
+
+async function cmdTier(i: ChatInputCommandInteraction, eph: boolean) {
+  ensureData()
+  const sh = loadSheets()
+  if (!sh || !sh.tiers.length) return i.reply({ content: '[PRTS] The tier list sheet is unavailable. I apologize.', flags: MessageFlags.Ephemeral })
+  const opQ = i.options.getString('operator')
+  const want = i.options.getString('tier')
+  const cls = i.options.getString('class')
+  const footer = `AK Tier List (fan-made, global, full investment, live from Google Sheets) · checked ${sheetDate('tier-list-aktierlist.txt')}`
+  if (opQ) {
+    ensureData()
+    const o = findOps(opQ, 1)[0]
+    const name = o?.name ?? opQ
+    const t = sh.tierOf.get(normName(name))
+    const e = embed(`Tier record: ${name}`)
+      .setDescription(t ? `Rated **${t.join(', ')}**.` : 'This operator is not listed on the tier list.')
+      .setFooter({ text: footer })
+    return i.reply({ embeds: [e], flags: ephFlag(eph) })
+  }
+  const order = sh.tiers.map(t => t.tier)
+  const list = sh.tiers.filter(t => (want ? t.tier === want : order.indexOf(t.tier) <= order.indexOf('A')))
+  const e = embed(`Operator tier list${want ? `: ${want}` : ''}${cls ? ` · ${cls}` : ''}`)
+    .setDescription('[Open the full sheet](https://docs.google.com/spreadsheets/d/1E7HmgKWiV8pKpJpvpVzziYxnaQTP01Vtw_PXEdL7XPA/edit)')
+    .setFooter({ text: footer })
+  for (const t of list) {
+    let names = t.names
+    if (cls) names = names.filter(n => classOfName(n, sh) === cls)
+    if (!names.length) continue
+    e.addFields({ name: t.tier, value: clip(names.join(', '), 1024) })
+    if ((e.data.fields?.length ?? 0) >= 24) break
+  }
+  if (!e.data.fields?.length) e.setDescription('No operators match that filter.')
+  return i.reply({ embeds: [e], flags: ephFlag(eph) })
+}
+
+// ───────────────────────── /module ─────────────────────────
+
+async function cmdModule(i: ChatInputCommandInteraction, eph: boolean) {
+  const sh = loadSheets()
+  ensureData()
+  const q = i.options.getString('operator', true)
+  const o = findOps(q, 1)[0]
+  const name = o?.name ?? q
+  const rows = sh?.modules.get(normName(name)) ?? []
+  const e = embed(`Module ratings: ${name}`).setFooter({ text: `DragonGJY module ratings (fan-made, based on CN) · checked ${sheetDate('module-ratings-dragongjy.txt')}` })
+  if (!rows.length) {
+    const mods = o?.modules.map(m => `**${m.type}** ${m.name}`).join('\n')
+    e.setDescription(`No rating found in the module sheet.${mods ? `\n\nModules in game data:\n${mods}` : ''}`).setColor(COLOR.dim)
+  } else {
+    e.setDescription('MR = module rating, IC = investment cost-efficiency, Rec. LV = recommended module level.')
+    for (const r of rows.slice(0, 6)) {
+      const [, arch, mod, quick, mr, ic, lv, pri, pros, cons] = r
+      e.addFields({
+        name: `${mod.trim()} module (${arch}) · MR ${mr} · IC ${ic} · ${lv} · Priority ${pri}`,
+        value: clip(`${quick}\n**Pros:** ${pros}\n**Cons:** ${cons}`, 1024),
+      })
+    }
+  }
+  if (o) e.addFields({ name: 'Links', value: opLinks(o) })
+  return i.reply({ embeds: [e], flags: ephFlag(eph) })
+}
+
+// ───────────────────────── /farm ─────────────────────────
+
+function findMaterial(q: string, sh: Sheets) {
+  const n = normName(q)
+  for (const [key, v] of sh.farm) if (normName(key) === n || normName(v.label).includes(n)) return { key, ...v }
+  for (const [key, v] of sh.farm)
+    if (
+      normName(v.label)
+        .split(' ')
+        .some(w => w.startsWith(n))
+    )
+      return { key, ...v }
+  return null
+}
+
+async function cmdFarm(i: ChatInputCommandInteraction, eph: boolean) {
+  const sh = loadSheets()
+  const q = i.options.getString('material', true)
+  const m = sh && findMaterial(q, sh)
+  if (!m) return i.reply({ content: `[PRTS] No farming record for "${clip(q, 60)}". Try names like Orirock, Device, RMA, Gel or Alloy.`, flags: MessageFlags.Ephemeral })
+  const lines = m.rows
+    .slice(0, 10)
+    .map(([st, eff, drop], idx) => `\`${String(idx + 1).padStart(2)}\` **${st}** · efficiency ${(eff * 100).toFixed(1)}%${isNaN(drop) ? '' : ` · main drop ${(drop * 100).toFixed(1)}%`}`)
+  const e = embed(`Farming: ${m.label}`)
+    .setDescription(
+      `${lines.join('\n')}\n\nEfficiency is relative to the best stage (100%). "(perm)" stages are permanent event reruns.\n[Open the full sheet](https://docs.google.com/spreadsheets/d/1RRiTIYVUNUf-xW8ljAJdYEOuSo23lpjHkPa0-zuC_4k/htmlview) · [Penguin Statistics](https://penguin-stats.io)`,
+    )
+    .setFooter({ text: `PeterYR farming sheet (fan-made, Penguin Statistics data) · checked ${sheetDate('peteryr-farming.txt')}` })
+  return i.reply({ embeds: [e], flags: ephFlag(eph) })
+}
+
+// ───────────────────────── /recruit ─────────────────────────
+
+function opRecruitTags(o: Op): Set<string> {
+  const t = new Set<string>([o.cls, o.pos, ...o.tags])
+  if (o.rarity === 6) t.add('Top Operator')
+  if (o.rarity === 5) t.add('Senior Operator')
+  if (o.rarity === 2) t.add('Starter')
+  if (o.rarity === 1) t.add('Robot')
+  return t
+}
+
+async function cmdRecruit(i: ChatInputCommandInteraction, eph: boolean) {
+  ensureData()
+  if (!data) return notReady(i, eph)
+  const known = new Map(data.recruitTags.map(t => [normName(t), t]))
+  const chosen: string[] = []
+  for (const k of [1, 2, 3, 4, 5]) {
+    const v = i.options.getString(`tag${k}`)
+    if (!v) continue
+    const t = known.get(normName(v))
+    if (!t) return i.reply({ content: `[PRTS] "${clip(v, 40)}" is not a recruitment tag. Please pick from the suggestions.`, flags: MessageFlags.Ephemeral })
+    if (!chosen.includes(t)) chosen.push(t)
+  }
+  const pool = data.ops.filter(o => o.recruit).map(o => ({ o, tags: opRecruitTags(o) }))
+  const combos: { tags: string[]; ops: Op[]; min: number }[] = []
+  const n = chosen.length
+  for (let mask = 1; mask < 1 << n; mask++) {
+    const tags = chosen.filter((_, b) => mask & (1 << b))
+    if (tags.length > 3) continue
+    let ops = pool.filter(p => tags.every(t => p.tags.has(t))).map(p => p.o)
+    if (!tags.includes('Top Operator')) ops = ops.filter(o => o.rarity < 6)
+    if (!ops.length) continue
+    const special = tags.includes('Robot') || tags.includes('Starter')
+    const counted = special ? ops : ops.filter(o => o.rarity >= 3) // 9-hour recruits skip 1–2★
+    if (!counted.length) continue
+    combos.push({ tags, ops: counted.sort((a, b) => b.rarity - a.rarity), min: Math.min(...counted.map(o => o.rarity)) })
+  }
+  const good = combos.filter(c => c.min >= 4 || c.tags.includes('Robot')).sort((a, b) => b.min - a.min || a.ops.length - b.ops.length)
+  const e = embed(`Recruitment analysis: ${chosen.join(', ')}`)
+  if (!good.length) {
+    e.setColor(COLOR.dim).setDescription('No combination guarantees a 4★ or better operator. Recommendation: set the timer to 9:00:00 for experience, or refresh the tags.')
+  } else {
+    if (chosen.includes('Top Operator')) e.setColor(COLOR.ok).setDescription('**Top Operator** detected. Set the timer to 9:00:00 and select it. A 6★ operator is guaranteed. Congratulations.')
+    else e.setDescription('Set the timer to **9:00:00** and select one of these tag sets. Minimum rarity is guaranteed.')
+    for (const c of good.slice(0, 12)) {
+      const label = c.tags.includes('Robot') && c.min < 4 ? '1★ Robot' : `${c.min}★+`
+      e.addFields({
+        name: `${label} · ${c.tags.join(' + ')}`,
+        value: clip(c.ops.map(o => `${o.name} ${o.rarity}★`).join(', '), 1024),
+      })
+    }
+  }
+  e.setFooter({ text: `${FOOTER} · Recruitment pool from EN game data` })
+  return i.reply({ embeds: [e], flags: ephFlag(eph) })
+}
+
+// ───────────────────────── /wiki ─────────────────────────
+
+async function wikiApi(params: Record<string, string>, timeoutMs = 8000): Promise<any> {
+  const u = new URL(WIKI + '/api.php')
+  for (const [k, v] of Object.entries({ format: 'json', ...params })) u.searchParams.set(k, v)
+  const r = await fetch(u, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(timeoutMs) })
+  if (!r.ok) throw new Error(`wiki ${r.status}`)
+  return r.json()
+}
+
+async function wikiLookup(q: string): Promise<EmbedBuilder | null> {
+  const s = await wikiApi({ action: 'query', list: 'search', srsearch: q, srlimit: '6', srwhat: 'text' })
+  let titles: string[] = (s.query?.search ?? []).map((x: any) => x.title)
+  // Prefer an exact or near-exact title match.
+  const exact = await wikiApi({ action: 'opensearch', search: q, limit: '1' }).catch(() => null)
+  const ex = exact?.[1]?.[0]
+  if (ex && normName(ex) === normName(q)) titles = [ex, ...titles.filter(t => t !== ex)]
+  if (!titles.length) return null
+  const p = await wikiApi({ action: 'query', prop: 'extracts', exintro: '1', explaintext: '1', exsentences: '5', titles: titles[0], redirects: '1' })
+  const page: any = Object.values(p.query?.pages ?? {})[0]
+  const title = page?.title ?? titles[0]
+  const e = embed(title)
+    .setURL(wikiUrl(title))
+    .setDescription(clip(page?.extract || 'No summary available. Please open the page.', 1500))
+  const more = titles.slice(1, 6).map(t => `[${t}](${wikiUrl(t)})`)
+  if (more.length) e.addFields({ name: 'Other results', value: more.join(' · ') })
+  e.setFooter({ text: `${FOOTER} · arknights.wiki.gg` })
+  return e
+}
+
+async function cmdWiki(i: ChatInputCommandInteraction, eph: boolean) {
+  const q = i.options.getString('query', true)
+  await i.deferReply({ flags: ephFlag(eph) })
+  try {
+    const e = await wikiLookup(q)
+    if (!e) return i.editReply({ content: `[PRTS] The wiki has no record matching "${clip(q, 80)}".` })
+    return i.editReply({ embeds: [e] })
+  } catch (err) {
+    log(`wiki: ${err}`)
+    return i.editReply({ content: `[PRTS] The wiki did not respond. Please try again, or search directly: ${WIKI}/index.php?search=${encodeURIComponent(q)}` })
+  }
+}
+
+// ───────────────────────── /story ─────────────────────────
+
+type Story = { group: string; group_name: string; kind: string; code: string; name: string; tag: string; file: string; synopsis: string; operator: string }
+let stories: Story[] | null = null
+function loadStories(): Story[] {
+  if (!stories) {
+    try {
+      stories = JSON.parse(readFileSync(STORIES_JSON, 'utf8'))
+    } catch (e) {
+      log(`stories: ${e}`)
+      stories = []
+    }
+  }
+  return stories!
+}
+
+function storyLink(s: Story): string | null {
+  ensureData()
+  const slug = data?.timoGroups[s.group]
+  if (slug) return `${TIMO}/${s.group.startsWith('main_') ? 'main' : 'side'}/${slug}`
+  if (s.operator) {
+    const o = findOps(s.operator, 1)[0]
+    const os = o && data?.timoOps[o.id]
+    if (os) return `${TIMO}/operators/${os}`
+  }
+  return null
+}
+
+async function cmdStory(i: ChatInputCommandInteraction, eph: boolean) {
+  const q = i.options.getString('query', true).trim()
+  const n = q.toLowerCase()
+  const all = loadStories()
+  const exactCode = all.filter(s => s.code.toLowerCase() === n)
+  const hits = exactCode.length ? exactCode : all.filter(s => s.name.toLowerCase().includes(n) || s.group_name.toLowerCase().includes(n) || s.operator.toLowerCase() === n)
+  if (!hits.length) {
+    return i.reply({ content: `[PRTS] No story matches "${clip(q, 60)}". Try a stage code (15-12), a title, or an event name. Full library: ${TIMO}`, flags: MessageFlags.Ephemeral })
+  }
+  // Collapse to groups when a query matches a whole event.
+  const e = embed(`Story records: ${clip(q, 80)}`).setURL(TIMO)
+  const seen = new Set<string>()
+  let shown = 0
+  for (const s of hits) {
+    const key = `${s.group}|${s.code}|${s.name}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const link = storyLink(s)
+    const title = clip(`${s.code ? s.code + ' ' : ''}${s.name}${s.tag ? ` (${s.tag})` : ''} · ${s.group_name}`, 250)
+    e.addFields({ name: title, value: clip(`${s.synopsis ? clip(s.synopsis, 220) + '\n' : ''}${link ? `[Read in Timo's reader](${link})` : ''}` || '—', 1024) })
+    if (++shown >= 8) break
+  }
+  if (hits.length > shown) e.setDescription(`Showing ${shown} of ${hits.length} matches. Narrow the query for more precise results.`)
+  e.setFooter({ text: `${FOOTER} · Story index: arknights.timo.beer` })
+  return i.reply({ embeds: [e], flags: ephFlag(eph) })
+}
+
+// ───────────────────────── /base ─────────────────────────
+
+async function cmdBase(i: ChatInputCommandInteraction, eph: boolean) {
+  ensureData()
+  const sh = loadSheets()
+  const opQ = i.options.getString('operator')
+  const teamQ = i.options.getString('team')
+  const fac = i.options.getString('facility')
+  const footer = `RIIC base skill guide (fan-made, live from Google Sheets) · checked ${sheetDate('riic-base-skills.txt')}`
+  if (opQ) {
+    if (!data) return notReady(i, eph)
+    const o = findOps(opQ, 1)[0]
+    if (!o) return i.reply({ content: `[PRTS] No operator matches "${clip(opQ, 60)}".`, flags: MessageFlags.Ephemeral })
+    const e = embed(`Base skills: ${o.name}`).setURL(RIIC_URL).setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${o.id}.png`).setFooter({ text: footer })
+    for (const b of (o.base ?? []).slice(0, 6)) e.addFields({ name: `${b.unlock} · ${b.room} · ${b.name}`, value: clip(b.desc, 1024) })
+    if (!o.base?.length) e.setDescription('No base skills found in game data.')
+    const note = sh?.notes.get(normName(o.name))
+    if (note) e.addFields({ name: `Guide notes (${note.facilities})`, value: clip(note.text.replace(/ - /g, '\n- '), 1024) })
+    const key = normName(o.name)
+    const teams = (sh?.teams ?? []).filter(t => t.tokens.has(key))
+    if (teams.length) e.addFields({ name: 'Appears in team combos', value: clip(teams.map(t => `**${t.title}** (${t.facility})`).join('\n'), 1024) })
+    return i.reply({ embeds: [e], flags: ephFlag(eph) })
+  }
+  if (teamQ) {
+    const n = normName(teamQ)
+    const t = sh?.teams.find(x => normName(x.title) === n) ?? sh?.teams.find(x => normName(x.title).includes(n))
+    if (!t) return i.reply({ content: `[PRTS] No team combo matches "${clip(teamQ, 60)}". Use the suggestions or /base facility:.`, flags: MessageFlags.Ephemeral })
+    const e = embed(t.title).setURL(RIIC_URL).setDescription(clip(t.desc, 2000)).setFooter({ text: footer })
+    e.addFields({ name: 'Facility', value: t.facility, inline: true })
+    if (t.effect) e.addFields({ name: 'Effect', value: clip(t.effect, 1024), inline: true })
+    if (t.members) e.addFields({ name: 'Core members', value: clip(t.members, 1024) })
+    return i.reply({ embeds: [e], flags: ephFlag(eph) })
+  }
+  const list = (sh?.teams ?? []).filter(t => !fac || t.facility === fac)
+  const e = embed(fac ? `Base team combos: ${fac}` : 'Base team combos')
+    .setURL(RIIC_URL)
+    .setFooter({ text: footer })
+  if (!fac) {
+    const by = new Map<string, string[]>()
+    for (const t of list) by.set(t.facility, [...(by.get(t.facility) ?? []), t.title])
+    e.setDescription('Use `/base operator:` for one operator, `/base team:` for details, or `/base facility:` to filter.')
+    for (const [f, ts] of by) e.addFields({ name: f, value: clip(ts.join(', '), 1024) })
+  } else {
+    e.setDescription(clip(list.map(t => `**${t.title}**${t.effect ? ` · ${clip(t.effect, 80)}` : ''}${t.members ? `\n${clip(t.members, 150)}` : ''}`).join('\n') || 'No teams listed.', 4000))
+  }
+  return i.reply({ embeds: [e], flags: ephFlag(eph) })
+}
+
+// ───────────────────────── /myrtle ─────────────────────────
+// Public player data from myrtle.moe's backend (the same JSON its site uses).
+// Only public profiles are returned; fields a player hides come back null.
+
+const MYRTLE_API = 'https://api.myrtle.moe/api'
+const MYRTLE_LINKS = join(CACHE_DIR, 'myrtle-links.json')
+const SCORE_NAMES: Record<string, string> = {
+  total_score: 'Total',
+  operator_score: 'Operators',
+  stage_score: 'Stages',
+  roguelike_score: 'Integrated Strategies',
+  sandbox_score: 'Reclamation Algorithm',
+  medal_score: 'Medals',
+  base_score: 'Base (RIIC)',
+}
+
+type MUser = {
+  uid: string
+  nickname: string
+  nick_number: string
+  level: number
+  server: string
+  avatar_id?: string
+  secretary?: string
+  secretary_skin_id?: string
+  resume?: string
+  total_score?: number
+  grade?: string
+  public_profile?: boolean
+  orundum?: number | null
+  lmd?: number | null
+  originite?: number | null
+  max_sanity?: number | null
+  monthly_sub_end?: number | null
+  register_ts?: number | null
+  last_online_ts?: number | null
+  cumulative_signin?: number | null
+  operator_count?: number
+  skin_count?: number
+  updated_at?: string
+  rank_global?: number
+  rank_server?: number
+  [k: string]: any
+}
+type MRosterOp = {
+  operator_id: string
+  elite: number
+  level: number
+  potential: number
+  skill_level: number
+  favor_point: number
+  skin_id: string
+  obtained_at: number
+  masteries: { index: number; mastery: number }[]
+  modules: { id: string; level: number; locked: boolean }[]
+}
+
+type MPull = { charId: string; star: string; poolId: string; at: number }
+// Myrtle's API keys (limited/regular/special) don't match the site's banner types, so pulls are regrouped by pool id.
+const PULL_KINDS: Record<string, string> = { limited: 'Limited', standard: 'Standard', kernel: 'Kernel', beginner: 'Beginner' }
+const pullKind = (poolId: string) => (/^LIMITED/.test(poolId) ? 'limited' : /^(FESCLASSIC|CLASSIC_DOUBLE)/.test(poolId) ? 'kernel' : /^BOOT/.test(poolId) ? 'beginner' : 'standard')
+
+// Item names for /myrtle inventory: the game's item table, cached for a day.
+type ItemTable = Record<string, { name: string; rarity: any; sortId: number }>
+let itemTable: { at: number; items: ItemTable } | null = null
+async function getItems(): Promise<ItemTable> {
+  if (itemTable && Date.now() - itemTable.at < 24 * 3600_000) return itemTable.items
+  const r = await fetch(`${GAMEDATA}item_table.json`, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(30_000) })
+  if (!r.ok) throw new Error(`item_table ${r.status}`)
+  itemTable = { at: Date.now(), items: (await r.json()).items ?? {} }
+  return itemTable.items
+}
+const rarityNum = (r: any) => (typeof r === 'number' ? r + 1 : Number(/(\d+)/.exec(String(r))?.[1] ?? 1))
+// Myrtle's showcase names can arrive as UTF-8 read as Latin-1; undo that when it round-trips cleanly.
+const fixText = (s: string) => {
+  if (!/[Â-Å]/.test(s)) return s
+  const t = Buffer.from(s, 'latin1').toString('utf8')
+  return t.includes('�') ? s : t
+}
+
+async function myrtleGet(path: string, timeoutMs = 15_000): Promise<any> {
+  const r = await fetch(`${MYRTLE_API}/${path}`, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(timeoutMs) })
+  if (r.status === 404) return null
+  if (!r.ok) throw new Error(`myrtle ${r.status} ${path}`)
+  return r.json()
+}
+const myrtleSearch = async (q: string, limit = 25, timeoutMs?: number): Promise<{ entries: MUser[]; total: number }> =>
+  (await myrtleGet(`search?q=${encodeURIComponent(q)}&limit=${limit}`, timeoutMs)) ?? { entries: [], total: 0 }
+const myrtleUrl = (uid: string) => `${MYRTLE}/user/${uid}`
+const tag = (u: MUser) => (u.nick_number ? `${u.nickname}#${u.nick_number}` : u.nickname)
+// Myrtle's avatar URL scheme: "@" becomes "_" and the "#N" stays; without an "@", a trailing "#N" is dropped.
+const myrtleAvatar = (id?: string) => {
+  if (!id) return null
+  const s = id.includes('@') ? id.replace(/@/g, '_') : id.replace(/#\d+$/, '')
+  return `${MYRTLE_API}/avatar/${encodeURIComponent(s)}`
+}
+const pct = (x?: number | null) => (typeof x === 'number' ? `${(x * 100).toFixed(1)}%` : '—')
+const num = (x?: number | null) => (typeof x === 'number' ? x.toLocaleString('en-US') : null)
+const opInfo = (id: string) => opIndex()?.byId.get(id)
+const opName = (id: string) => opInfo(id)?.name ?? id.replace(/^char_\d+_/, '')
+
+function loadLinks(): Record<string, string> {
+  try {
+    return JSON.parse(readFileSync(MYRTLE_LINKS, 'utf8'))
+  } catch {
+    return {}
+  }
+}
+function saveLinks(l: Record<string, string>) {
+  mkdirSync(CACHE_DIR, { recursive: true })
+  writeFileSync(MYRTLE_LINKS + '.tmp', JSON.stringify(l, null, 2))
+  renameSync(MYRTLE_LINKS + '.tmp', MYRTLE_LINKS)
+}
+
+// Name, Name#1234, UID or a myrtle.moe/user/<uid> link → one user (or why not).
+async function resolvePlayer(q: string): Promise<{ user: MUser; others: MUser[] } | string> {
+  const s = q.trim()
+  const url = /myrtle\.moe\/user\/(\d+)/i.exec(s)
+  const uid = url?.[1] ?? (/^\d{5,12}$/.test(s) ? s : null)
+  if (uid) {
+    const u = await myrtleGet(`get-user?uid=${uid}`)
+    if (u?.uid) return { user: u, others: [] }
+    if (url) return `No public Myrtle profile has UID ${uid}. It may be private or not uploaded yet.`
+  }
+  const m = /^(.*?)#(\d{1,6})$/.exec(s)
+  const name = (m?.[1] ?? s).trim()
+  if (!name) return 'Please give a name, Name#1234, UID or myrtle.moe link.'
+  const { entries } = await myrtleSearch(name, 50)
+  let hits = entries
+  if (m) hits = hits.filter(e => e.nick_number === m[2].padStart(4, '0') || e.nick_number === m[2])
+  const exact = hits.filter(e => e.nickname.toLowerCase() === name.toLowerCase())
+  const pick = exact.length ? exact : hits
+  if (!pick.length) return `No public Myrtle profile matches "${clip(s, 60)}". The player may not have uploaded their account, or the profile is private.`
+  const full = (await myrtleGet(`get-user?uid=${pick[0].uid}`)) ?? pick[0]
+  return { user: full, others: pick.slice(1, 6) }
+}
+
+// The player to show: the player: option, else the user: option's link, else your own link.
+async function targetPlayer(i: ChatInputCommandInteraction): Promise<{ user: MUser; others: MUser[] } | string> {
+  const q = i.options.getString('player')
+  if (q) return resolvePlayer(q)
+  const du = i.options.getUser('user')
+  const links = loadLinks()
+  const uid = links[(du ?? i.user).id]
+  if (!uid)
+    return du
+      ? `${du.username} has not linked a Myrtle profile. They can use \`/myrtle link\`.`
+      : 'No Myrtle profile is linked to your account. Use `/myrtle link player:<name#1234 or UID>`, or give `player:`.'
+  return resolvePlayer(uid)
+}
+
+const fail = (i: ChatInputCommandInteraction, msg: string) => i.editReply({ embeds: [embed('Record not found').setColor(COLOR.warn).setDescription(msg)] })
+
+// "Y3" (type letter + level), or "TYP-Y Lv3" in long form; falls back to the level.
+function modLabel(opId: string, m: { id: string; level: number }, long = false): string {
+  const t = opInfo(opId)?.modules.find(x => x.id === m.id)?.type
+  if (!t) return `Lv${m.level}`
+  return long ? `${t} Lv${m.level}` : `${t.split('-').pop()}${m.level}`
+}
+
+function opLine(r: MRosterOp): string {
+  const o = opInfo(r.operator_id)
+  const m = r.masteries.map(x => x.mastery)
+  const mods = r.modules.filter(x => !x.locked && x.level > 0)
+  return [
+    `${o ? o.rarity + '★ ' : ''}**${opName(r.operator_id)}**`,
+    `E${r.elite} Lv${r.level}`,
+    `P${r.potential + 1}`,
+    `SL${r.skill_level}`,
+    m.some(Boolean) ? `M${m.join('/')}` : '',
+    mods.length ? `Mod ${mods.map(x => modLabel(r.operator_id, x)).join(', ')}` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+function rosterStats(ros: MRosterOp[]): string {
+  const c = (f: (r: MRosterOp) => boolean) => ros.filter(f).length
+  const six = c(r => opInfo(r.operator_id)?.rarity === 6)
+  const m9 = c(r => r.masteries.length > 0 && r.masteries.filter(x => x.mastery === 3).length >= 1)
+  const m3s = ros.reduce((n, r) => n + r.masteries.filter(x => x.mastery === 3).length, 0)
+  const mods = ros.reduce((n, r) => n + r.modules.filter(x => !x.locked && x.level > 0).length, 0)
+  return [
+    `**${ros.length}** operators · **${six}** 6★`,
+    `**${c(r => r.elite === 2)}** at E2 · **${c(r => r.elite === 2 && r.level >= 90)}** at E2 Lv90`,
+    `**${m3s}** M3 skills on **${m9}** operators · **${c(r => r.masteries.length > 0 && r.masteries.every(x => x.mastery === 3))}** fully mastered`,
+    `**${mods}** modules unlocked · **${c(r => r.favor_point >= 25570)}** at 200% trust`,
+  ].join('\n')
+}
+
+async function cmdMyrtle(i: ChatInputCommandInteraction, eph: boolean) {
+  const sub = i.options.getSubcommand()
+  ensureData()
+
+  if (sub === 'unlink') {
+    const links = loadLinks()
+    const had = links[i.user.id]
+    delete links[i.user.id]
+    saveLinks(links)
+    return i.reply({ content: had ? '[PRTS] Myrtle link removed. Your records remain on myrtle.moe.' : '[PRTS] No Myrtle profile was linked to your account.', flags: MessageFlags.Ephemeral })
+  }
+
+  await i.deferReply({ flags: ephFlag(sub === 'link' || eph) })
+
+  if (sub === 'link') {
+    const r = await resolvePlayer(i.options.getString('player', true))
+    if (typeof r === 'string') return fail(i, r)
+    const links = loadLinks()
+    links[i.user.id] = r.user.uid
+    saveLinks(links)
+    return i.editReply({
+      embeds: [
+        embed('Identity verification complete.')
+          .setColor(COLOR.ok)
+          .setDescription(
+            `Your Discord account is now linked to **[${tag(r.user)}](${myrtleUrl(r.user.uid)})** (${r.user.server}, UID ${r.user.uid}).\n` +
+              '`/myrtle profile` and `/myrtle roster` will show this account by default, and others can find it with `user:`.',
+          )
+          .setThumbnail(myrtleAvatar(r.user.avatar_id)),
+      ],
+    })
+  }
+
+  if (sub === 'search') {
+    const q = i.options.getString('name', true)
+    const { entries, total } = await myrtleSearch(q, 15)
+    if (!entries.length) return fail(i, `No public Myrtle profile matches "${clip(q, 60)}".`)
+    const e = embed(`Myrtle players matching "${clip(q, 40)}"`)
+      .setURL(`${MYRTLE}/user/search`)
+      .setDescription(entries.map(u => `[**${tag(u)}**](${myrtleUrl(u.uid)}) · ${u.server} · Lv${u.level} · ${u.grade ?? '?'} (${pct(u.total_score)}) · ${u.operator_count ?? '?'} ops`).join('\n'))
+      .setFooter({ text: `${FOOTER} · ${total} result(s)${total > entries.length ? `, showing ${entries.length}` : ''} · Data from myrtle.moe` })
+    return i.editReply({ embeds: [e] })
+  }
+
+  if (sub === 'leaderboard') {
+    const sort = i.options.getString('sort') ?? 'total_score'
+    const server = i.options.getString('server')
+    const lb = await myrtleGet(`leaderboard?sort=${sort}&limit=15${server ? `&server=${server}` : ''}`)
+    const rows: MUser[] = lb?.entries ?? []
+    if (!rows.length) return fail(i, 'The leaderboard returned no entries.')
+    const e = embed(`Myrtle leaderboard · ${SCORE_NAMES[sort]}${server ? ` · ${server}` : ''}`)
+      .setURL(`${MYRTLE}/user/leaderboard`)
+      .setDescription(
+        rows
+          .map(
+            (u, k) =>
+              `\`${String(k + 1).padStart(2)}\` [**${tag(u)}**](${myrtleUrl(u.uid)}) · ${u.server} · Lv${u.level} · **${pct(u[sort])}**${sort !== 'total_score' ? ` (total ${u.grade ?? ''} ${pct(u.total_score)})` : ` · ${u.grade ?? ''}`}`,
+          )
+          .join('\n'),
+      )
+      .setFooter({ text: `${FOOTER} · ${num(lb.total) ?? '?'} ranked accounts · Myrtle's account score, not an official ranking` })
+    return i.editReply({ embeds: [e] })
+  }
+
+  const t = await targetPlayer(i)
+  if (typeof t === 'string') return fail(i, t)
+  const u = t.user
+
+  if (sub === 'pulls') {
+    const raw: Record<string, { records: MPull[] }> | null = await myrtleGet(`gacha/public-records?uid=${u.uid}`).catch(() => null)
+    const data: Record<string, { records: MPull[] }> | null = raw && {}
+    if (raw && data) {
+      for (const v of Object.values(raw)) for (const x of v.records ?? []) (data[pullKind(x.poolId)] ??= { records: [] }).records.push(x)
+      for (const v of Object.values(data)) v.records.sort((a, b) => b.at - a.at) // newest first
+    }
+    const only = i.options.getString('banner')
+    const kinds = Object.entries(PULL_KINDS).filter(([k]) => !only || k === only)
+    const have = kinds.filter(([k]) => data?.[k]?.records?.length)
+    if (!data || !have.length) return fail(i, `**${tag(u)}** has no public pull history. They can upload it and switch on public pulls in their Myrtle settings.`)
+    const e = embed(`${tag(u)} · Headhunting`)
+      .setURL(`${myrtleUrl(u.uid)}?tab=pulls`)
+      .setThumbnail(myrtleAvatar(u.avatar_id))
+    const sixes: (MPull & { kind: string })[] = []
+    let all = 0
+    for (const [k, name] of have) {
+      const r = data[k].records // newest first
+      const n = (s: string) => r.filter(x => x.star === s).length
+      // Limited pity doesn't carry between limited banners, so only count within the latest banner.
+      const scope = k === 'limited' ? r.filter(x => x.poolId === r[0].poolId) : r
+      const since = scope.findIndex(x => x.star === '6')
+      all += r.length
+      for (const x of r) if (x.star === '6') sixes.push({ ...x, kind: name })
+      e.addFields({
+        name: name,
+        inline: true,
+        value: [
+          `**${r.length}** pulls`,
+          `6★ **${n('6')}** (${((n('6') / r.length) * 100).toFixed(2)}%) · 5★ **${n('5')}** (${((n('5') / r.length) * 100).toFixed(2)}%)`,
+          k === 'limited'
+            ? `**${since < 0 ? scope.length : since}** since last 6★ in the latest banner (resets each limited banner; 0 if it has ended)`
+            : since < 0
+              ? 'No 6★ yet'
+              : `**${since}** since last 6★`,
+        ].join('\n'),
+      })
+    }
+    sixes.sort((a, b) => b.at - a.at)
+    const line = (x: MPull & { kind: string }) => `6★ **${opName(x.charId)}** · ${x.kind} · <t:${Math.floor(x.at / 1000)}:d>`
+    const fives = have.flatMap(([k, name]) => data[k].records.filter(x => x.star === '5').map(x => ({ ...x, kind: name }))).sort((a, b) => b.at - a.at)
+    e.setDescription(
+      [
+        `**${all}** recorded pulls · pulls are grouped into banner types the same way as the Myrtle website`,
+        sixes.length ? '\n**Latest 6★**\n' + sixes.slice(0, 8).map(line).join('\n') : '',
+        fives.length
+          ? '\n**Latest 5★**\n' +
+            fives
+              .slice(0, 5)
+              .map(x => `5★ ${opName(x.charId)} · ${x.kind} · <t:${Math.floor(x.at / 1000)}:d>`)
+              .join('\n')
+          : '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    ).setFooter({ text: `${FOOTER} · Public pull data from myrtle.moe` })
+    return i.editReply({ embeds: [e] })
+  }
+
+  if (sub === 'inventory') {
+    const inv: { item_id: string; quantity: number }[] | null = await myrtleGet(`inventory?uid=${u.uid}`).catch(() => null)
+    if (!inv?.length) return fail(i, `**${tag(u)}** does not share an inventory publicly.`)
+    const items = await getItems().catch(() => ({}) as ItemTable)
+    const q = (i.options.getString('item') ?? '').trim().toLowerCase()
+    const rows = inv
+      .map(x => ({ name: items[x.item_id]?.name ?? x.item_id, q: x.quantity, r: rarityNum(items[x.item_id]?.rarity), sort: items[x.item_id]?.sortId ?? 0 }))
+      .filter(x => x.q > 0 && (!q || x.name.toLowerCase().includes(q)))
+      .sort((a, b) => b.r - a.r || b.sort - a.sort || b.q - a.q)
+    if (!rows.length) return fail(i, `No item in ${tag(u)}'s inventory matches "${clip(q, 60)}".`)
+    const shown: string[] = []
+    let len = 0
+    for (const x of rows) {
+      const l = `${'★'.repeat(Math.min(x.r, 6))} ${x.name} **×${num(x.q)}**`
+      if (len + l.length > 3800 || shown.length >= 70) break
+      shown.push(l)
+      len += l.length + 1
+    }
+    const e = embed(`${tag(u)} · Inventory`)
+      .setURL(`${myrtleUrl(u.uid)}?tab=inventory`)
+      .setThumbnail(myrtleAvatar(u.avatar_id))
+      .setDescription(shown.join('\n'))
+      .setFooter({ text: `${FOOTER} · Showing ${shown.length} of ${rows.length}${q ? ' (filtered)' : ''} · Data from myrtle.moe` })
+    return i.editReply({ embeds: [e] })
+  }
+
+  if (sub === 'lookback') {
+    const lb: { snapshots?: { period_start: string; activity_name?: string; summary: Record<string, any> }[] } | null = await myrtleGet(`lookback?uid=${u.uid}`).catch(() => null)
+    const snaps = [...(lb?.snapshots ?? [])].sort((a, b) => a.period_start.localeCompare(b.period_start))
+    if (!snaps.length) return fail(i, `**${tag(u)}** has no public progress snapshots yet.`)
+    const last = snaps.slice(-6)
+    const stats: [string, string][] = [
+      ['operators', 'Operators'],
+      ['elite2', 'E2'],
+      ['skill_level7', 'SL7'],
+      ['masteries', 'Masteries'],
+      ['mastery3', 'M3'],
+      ['modules', 'Modules'],
+      ['module_stage3', 'Mod Lv3'],
+      ['max_potential', 'Pot 6'],
+      ['skins', 'Outfits'],
+    ]
+    const e = embed(`${tag(u)} · Lookback`)
+      .setURL(`${myrtleUrl(u.uid)}?tab=lookback`)
+      .setThumbnail(myrtleAvatar(u.avatar_id))
+    last.forEach((sn, k) => {
+      const prev = snaps[snaps.length - last.length + k - 1]
+      const d = (key: string) => {
+        const a = sn.summary[key],
+          b = prev?.summary[key]
+        return typeof a === 'number' && typeof b === 'number' && a !== b ? ` (${a > b ? '+' : ''}${a - b})` : ''
+      }
+      const sc = sn.summary.total_score,
+        ps = prev?.summary.total_score
+      e.addFields({
+        name: `${clip(sn.activity_name ?? 'Snapshot', 60)} · <t:${Math.floor(Date.parse(sn.period_start) / 1000)}:d>`,
+        value:
+          stats
+            .filter(([key]) => typeof sn.summary[key] === 'number')
+            .map(([key, n]) => `${n} **${sn.summary[key]}**${d(key)}`)
+            .join(' · ') +
+          `\nScore **${sn.summary.grade ?? '?'}** ${pct(sc)}${typeof sc === 'number' && typeof ps === 'number' && sc !== ps ? ` (${sc > ps ? '+' : ''}${((sc - ps) * 100).toFixed(1)} pts)` : ''}`,
+      })
+    })
+    e.setFooter({ text: `${FOOTER} · Latest ${last.length} of ${snaps.length} snapshots · Data from myrtle.moe` })
+    return i.editReply({ embeds: [e] })
+  }
+
+  if (sub === 'enemies') {
+    const en: { encounteredCount?: number; handbookTotal?: number; enemies?: { enemyId: string; name: string; enemyIndex?: string; sortId?: number }[] } | null = await myrtleGet(
+      `encountered-enemies?uid=${u.uid}`,
+    ).catch(() => null)
+    if (!en || typeof en.encounteredCount !== 'number') return fail(i, `**${tag(u)}** does not share enemy handbook progress publicly.`)
+    const total = en.handbookTotal ?? 0
+    const e = embed(`${tag(u)} · Enemy handbook`)
+      .setURL(`${myrtleUrl(u.uid)}?tab=enemies`)
+      .setThumbnail(myrtleAvatar(u.avatar_id))
+      .setDescription(`**${en.encounteredCount}**${total ? ` of **${total}** enemies encountered (**${((en.encounteredCount / total) * 100).toFixed(1)}%**)` : ' enemies encountered'}`)
+    const q = (i.options.getString('enemy') ?? '').trim().toLowerCase()
+    if (q) {
+      const hits = (en.enemies ?? []).filter(x => fixText(x.name).toLowerCase().includes(q)).sort((a, b) => (a.sortId ?? 0) - (b.sortId ?? 0))
+      e.addFields({
+        name: `Met, matching "${clip(q, 40)}" (${hits.length})`,
+        value: clip(
+          hits
+            .slice(0, 40)
+            .map(x => fixText(x.name))
+            .join(' · ') || 'None met yet, or no such enemy.',
+          1000,
+        ),
+      })
+    }
+    e.setFooter({ text: `${FOOTER} · Data from myrtle.moe` })
+    return i.editReply({ embeds: [e] })
+  }
+
+  if (sub === 'plans') {
+    const pl: { id?: string; operator_id: string; groups?: string[] }[] | null = await myrtleGet(`plans/public?uid=${u.uid}`).catch(() => null)
+    if (!Array.isArray(pl) || !pl.length) return fail(i, `**${tag(u)}** has no public operator plans.`)
+    const groups = new Map<string, string[]>()
+    for (const p of pl) for (const g of p.groups?.length ? p.groups : ['Ungrouped']) groups.set(g, [...(groups.get(g) ?? []), opName(p.operator_id)])
+    const e = embed(`${tag(u)} · Plans`)
+      .setURL(`${myrtleUrl(u.uid)}?tab=plans`)
+      .setThumbnail(myrtleAvatar(u.avatar_id))
+      .setDescription(`**${pl.length}** planned operators. Open the profile for the exact targets.`)
+    for (const [g, names] of [...groups].slice(0, 15)) e.addFields({ name: `${clip(g, 60)} (${names.length})`, value: clip(names.join(' · '), 1000) })
+    e.setFooter({ text: `${FOOTER} · Data from myrtle.moe` })
+    return i.editReply({ embeds: [e] })
+  }
+
+  if (sub === 'showcase') {
+    const sc: { blocks?: { block: any; removed?: boolean; entities?: { id: string; entity?: { name?: string } | null }[] }[] } | null = await myrtleGet(`get-user-showcase?uid=${u.uid}`).catch(
+      () => null,
+    )
+    const blocks = (sc?.blocks ?? []).filter(b => !b.removed)
+    if (!blocks.length) return fail(i, `**${tag(u)}** has not set up a profile showcase.`)
+    const KINDS: Record<string, string> = { operator: 'Favourite operators', enemy: 'Favourite enemies', skin: 'Favourite outfits' }
+    const e = embed(`${tag(u)} · Showcase`)
+      .setURL(`${myrtleUrl(u.uid)}?tab=showcase`)
+      .setThumbnail(myrtleAvatar(u.avatar_id))
+    for (const b of blocks.slice(0, 20)) {
+      const t = b.block?.type
+      if (t === 'favourites') {
+        const names = (b.entities ?? []).map(x => fixText(x.entity?.name ?? x.id.replace(/^(char|enemy)_\d+_/, '')))
+        e.addFields({ name: `${KINDS[b.block.entity_kind] ?? 'Favourites'} (${names.length})`, value: clip(names.join(' · ') || '—', 1000) })
+      } else if (t === 'tier_list') e.addFields({ name: 'Tier list', value: `[${clip(String(b.block.slug), 80)}](${MYRTLE}/tier-lists/${encodeURIComponent(b.block.slug)})` })
+      else if (t === 'grid') e.addFields({ name: 'Grid', value: `[${clip(String(b.block.slug), 80)}](${MYRTLE}/grids/${encodeURIComponent(b.block.slug)})` })
+      else if (t === 'plan') e.addFields({ name: 'Plan', value: `${opName(String(b.block.operator_id ?? ''))} · [Showcase](${myrtleUrl(u.uid)}?tab=showcase)` })
+    }
+    e.setFooter({ text: `${FOOTER} · Data from myrtle.moe` })
+    return i.editReply({ embeds: [e] })
+  }
+
+  const roster: MRosterOp[] = (await myrtleGet(`roster?uid=${u.uid}`).catch(() => null)) ?? []
+  const others = t.others.length ? `\nOther matches: ${t.others.map(o => `[${tag(o)}](${myrtleUrl(o.uid)})`).join(', ')}` : ''
+
+  if (sub === 'roster') {
+    if (!roster.length) return fail(i, `**${tag(u)}** does not share their roster publicly.`)
+    const opQ = i.options.getString('operator')
+    const e = embed(`${tag(u)} · Roster`)
+      .setURL(myrtleUrl(u.uid))
+      .setThumbnail(myrtleAvatar(u.avatar_id))
+    if (opQ) {
+      const o = findOps(opQ, 1)[0]
+      const r = o && roster.find(x => x.operator_id === o.id)
+      if (!o) return fail(i, `No operator matches "${clip(opQ, 60)}".`)
+      if (!r) return i.editReply({ embeds: [e.setDescription(`**${o.name}** is not in ${tag(u)}'s roster.${others}`)] })
+      e.setTitle(`${tag(u)} · ${o.name}`)
+        .setDescription(opLine(r) + others)
+        .setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${o.id}.png`)
+        .addFields(
+          {
+            name: 'Skills',
+            value: r.masteries.length ? r.masteries.map(x => `S${x.index + 1}: ${x.mastery ? 'M' + x.mastery : `SL${r.skill_level}`}`).join(' · ') : `SL${r.skill_level}`,
+            inline: true,
+          },
+          {
+            name: 'Modules',
+            value: r.modules.length ? r.modules.map(x => (x.locked ? `${modLabel(r.operator_id, x, true)} locked` : modLabel(r.operator_id, x, true))).join(' · ') : 'None',
+            inline: true,
+          },
+          { name: 'Trust', value: r.favor_point >= 25570 ? '200% (max)' : `${num(r.favor_point)} pts`, inline: true },
+          { name: 'Obtained', value: r.obtained_at ? `<t:${r.obtained_at}:D>` : '—', inline: true },
+          { name: 'Links', value: `[Myrtle profile](${myrtleUrl(u.uid)}) · [Operator page](${MYRTLE}/operators/${o.id}) · [Wiki](${wikiUrl(o.name)})` },
+        )
+      return i.editReply({ embeds: [e] })
+    }
+    const sort = i.options.getString('sort') ?? 'level'
+    const rar = i.options.getInteger('rarity')
+    const cls = i.options.getString('class')
+    let list = roster.filter(r => (!rar || opInfo(r.operator_id)?.rarity === rar) && (!cls || opInfo(r.operator_id)?.cls === cls))
+    const rarity = (r: MRosterOp) => opInfo(r.operator_id)?.rarity ?? 0
+    const mast = (r: MRosterOp) => r.masteries.reduce((n, x) => n + x.mastery, 0)
+    const mods = (r: MRosterOp) => r.modules.reduce((n, x) => n + (x.locked ? 0 : x.level), 0)
+    const by: Record<string, (a: MRosterOp, b: MRosterOp) => number> = {
+      level: (a, b) => b.elite - a.elite || b.level - a.level || rarity(b) - rarity(a),
+      rarity: (a, b) => rarity(b) - rarity(a) || b.elite - a.elite || b.level - a.level,
+      mastery: (a, b) => mast(b) - mast(a) || b.elite - a.elite || b.level - a.level,
+      module: (a, b) => mods(b) - mods(a) || b.elite - a.elite || b.level - a.level,
+      recent: (a, b) => b.obtained_at - a.obtained_at,
+    }
+    list = list.sort(by[sort] ?? by.level)
+    const shown: string[] = []
+    for (const r of list) {
+      const line = opLine(r)
+      if (shown.join('\n').length + line.length > 3600 || shown.length >= 20) break
+      shown.push(line)
+    }
+    e.setDescription((shown.join('\n') || 'No operators match those filters.') + others)
+      .addFields({ name: 'Roster summary', value: rosterStats(roster) })
+      .setFooter({ text: `${FOOTER} · Showing ${shown.length} of ${list.length}${rar || cls ? ' (filtered)' : ''} · Data from myrtle.moe` })
+    return i.editReply({ embeds: [e] })
+  }
+
+  // profile
+  const [score, supports, rank] = await Promise.all([
+    myrtleGet(`get-user-score?uid=${u.uid}`).catch(() => null),
+    myrtleGet(`get-user-supports?uid=${u.uid}`).catch(() => null),
+    myrtleGet(`leaderboard?q=${encodeURIComponent(u.nickname)}&limit=50`)
+      .then(r => (r?.entries ?? []).find((x: MUser) => x.uid === u.uid))
+      .catch(() => null),
+  ])
+  const now = Date.now() / 1000
+  const sec = u.secretary ? opName(u.secretary) : null
+  const e = embed(tag(u))
+    .setURL(myrtleUrl(u.uid))
+    .setThumbnail(myrtleAvatar(u.avatar_id))
+    .setDescription([u.resume ? `*${clip(u.resume, 200)}*` : '', `**Lv${u.level}** · ${u.server} server · UID \`${u.uid}\`${sec ? ` · Assistant: ${sec}` : ''}`].filter(Boolean).join('\n') + others)
+  const s = score ?? u
+  e.addFields({ name: 'Account score', value: `**${s.grade ?? u.grade ?? '?'}** · ${pct(s.total_score)}`, inline: true })
+  if (rank?.rank_global) e.addFields({ name: 'Rank', value: `#${num(rank.rank_global)} global · #${num(rank.rank_server)} ${u.server}`, inline: true })
+  e.addFields({ name: 'Collection', value: `${u.operator_count ?? roster.length} operators · ${u.skin_count ?? '?'} outfits`, inline: true })
+  if (score)
+    e.addFields({
+      name: 'Score breakdown',
+      value: Object.entries(SCORE_NAMES)
+        .filter(([k]) => k !== 'total_score')
+        .map(([k, n]) => `${n}: **${pct(score[k])}**`)
+        .join(' · '),
+    })
+  if (Array.isArray(supports) && supports.length)
+    e.addFields({
+      name: 'Support units',
+      value: supports
+        .map(
+          (x: any) =>
+            `**${opName(x.operator_id)}** · E${x.elite} Lv${x.level} · S${x.skill_index + 1} ${x.specialize_level ? 'M' + x.specialize_level : 'SL' + x.skill_level}${x.current_equip ? ` · Mod ${modLabel(x.operator_id, { id: x.current_equip, level: roster.find(r => r.operator_id === x.operator_id)?.modules.find(m => m.id === x.current_equip)?.level ?? 1 })}` : ''}`,
+        )
+        .join('\n'),
+    })
+  if (roster.length) e.addFields({ name: 'Roster', value: rosterStats(roster) })
+  const res = [num(u.lmd) && `${num(u.lmd)} LMD`, num(u.orundum) && `${num(u.orundum)} Orundum`, num(u.originite) && `${num(u.originite)} Originite Prime`].filter(Boolean)
+  if (res.length) e.addFields({ name: 'Resources', value: res.join(' · '), inline: true })
+  const acct = [
+    u.register_ts ? `Joined <t:${u.register_ts}:D>` : '',
+    u.last_online_ts ? `Last online <t:${u.last_online_ts}:R>` : '',
+    u.cumulative_signin ? `${u.cumulative_signin} check-in days` : '',
+    u.monthly_sub_end ? (u.monthly_sub_end > now ? `Monthly Card until <t:${u.monthly_sub_end}:D>` : 'No active Monthly Card') : '',
+  ].filter(Boolean)
+  if (acct.length) e.addFields({ name: 'Account', value: acct.join('\n'), inline: true })
+  e.addFields({ name: 'Links', value: `[Profile](${myrtleUrl(u.uid)}) · [Leaderboard](${MYRTLE}/user/leaderboard) · Roster: \`/myrtle roster player:${u.uid}\`` })
+  e.setImage(`${MYRTLE}/api/og/user/${u.uid}?v=${encodeURIComponent(u.updated_at ?? '')}`)
+  e.setFooter({ text: `${FOOTER} · Data from myrtle.moe${u.updated_at ? ' · synced' : ''}` })
+  if (u.updated_at) e.setTimestamp(new Date(u.updated_at))
+  return i.editReply({ embeds: [e] })
+}
+
+// ───────────────────────── /skin ─────────────────────────
+// Outfit data and chibi availability come from Myrtle's backend; images are
+// the official art files hosted on Myrtle's asset CDN (embedded by URL).
+// Animated art and chibis are Spine data that Myrtle animates in the browser,
+// so the bot links to the operator's Myrtle page for those.
+
+const MYRTLE_ASSETS = 'https://assets.eltik.net/myrtle/en/textures'
+type Outfit = {
+  id: string
+  name: string
+  line: string
+  artist: string
+  obtain: string
+  time: number
+  portrait: string
+  animated: boolean
+  chibi: string[]
+  elite?: number
+}
+const outfitCache = new Map<string, { at: number; list: Outfit[] }>()
+
+async function getOutfits(opId: string): Promise<Outfit[]> {
+  const hit = outfitCache.get(opId)
+  if (hit && Date.now() - hit.at < 3600_000) return hit.list
+  const [skins, chibis] = await Promise.all([myrtleGet(`skins/${opId}`), myrtleGet(`chibis/${opId}`).catch(() => null)])
+  const chibiOf = new Map<string, string[]>()
+  for (const s of chibis?.skins ?? [])
+    chibiOf.set(
+      String(s.name),
+      Object.keys(s.animationTypes ?? {}).filter(k => k !== 'dynamic'),
+    )
+  const NAMES: Record<string, string> = { dorm: 'base', front: 'battle (front)', back: 'battle (back)' }
+  const list: Outfit[] = []
+  for (const s of Object.values<any>(skins?.charSkins ?? {})) {
+    if (s.charId !== opId || !s.portraitId) continue
+    const d = s.displaySkin ?? {}
+    const def = /#\d+$/.test(s.skinId) && !s.skinId.includes('@')
+    const elite = def ? (s.skinId.endsWith('#1') ? 0 : 2) : undefined
+    const key = def ? 'default' : (s.skinId.split('@')[1] ?? '')
+    if (def && s.skinId.endsWith('#1+')) continue
+    list.push({
+      id: s.skinId,
+      name: def ? `Default outfit (Elite ${elite})` : stripRich(d.skinName ?? s.skinId),
+      line: def ? '' : stripRich(d.skinGroupName ?? ''),
+      artist: (d.drawerList ?? []).join(', '),
+      obtain: def ? (elite === 0 ? 'Recruited' : 'Promote to Elite 2') : stripRich(d.obtainApproach ?? ''),
+      time: d.getTime ?? 0,
+      portrait: s.portraitId,
+      animated: !!s.dynIllustId,
+      chibi: (chibiOf.get(key) ?? []).map(k => NAMES[k] ?? k),
+      elite,
+    })
+  }
+  list.sort((a, b) => (a.elite ?? 9) - (b.elite ?? 9) || a.time - b.time)
+  outfitCache.set(opId, { at: Date.now(), list })
+  return list
+}
+
+// Link buttons under a /skin reply: Myrtle's player for chibis and animated art.
+function skinButtons(op: Op, o?: Outfit) {
+  const page = `${MYRTLE}/operators/${op.id}`
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('▶ Chibi player').setURL(page).setEmoji('🐾'))
+  if (!o || o.animated) row.addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Animated art').setURL(page).setEmoji('✨'))
+  if (o) row.addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Full-size art').setURL(outfitArt(op.id, o)))
+  row.addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Wiki').setURL(wikiUrl(op.name)))
+  return [row]
+}
+
+const outfitArt = (opId: string, o: Outfit) =>
+  o.elite !== undefined ? `${MYRTLE_ASSETS}/chararts/${opId}/${opId}_${o.elite === 0 ? 1 : 2}.png` : `${MYRTLE_ASSETS}/skinpack/${opId}/${encodeURIComponent(o.portrait)}.png`
+
+async function cmdSkin(i: ChatInputCommandInteraction, eph: boolean) {
+  ensureData()
+  if (!data) return notReady(i, eph)
+  const q = i.options.getString('operator', true)
+  const op = findOps(q, 1)[0]
+  if (!op) return i.reply({ content: `[PRTS] No operator matches "${clip(q, 60)}". Please check the spelling.`, flags: MessageFlags.Ephemeral })
+  await i.deferReply({ flags: ephFlag(eph) })
+  const list = await getOutfits(op.id)
+  if (!list.length) return fail(i, `No outfit records found for **${op.name}**.`)
+  const page = `${MYRTLE}/operators/${op.id}`
+  const want = i.options.getString('outfit')
+  if (want) {
+    const n = normName(want)
+    const o = list.find(x => x.id === want) ?? list.find(x => normName(x.name) === n) ?? list.find(x => normName(x.name).includes(n))
+    if (!o) return fail(i, `**${op.name}** has no outfit matching "${clip(want, 60)}". Outfits: ${list.map(x => x.name).join(', ')}`)
+    const e = embed(`${op.name} · ${o.name}`)
+      .setURL(page)
+      .setDescription([o.line && `*${o.line}*`].filter(Boolean).join('\n') || null)
+      .setImage(outfitArt(op.id, o))
+      .setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${op.id}.png`)
+    if (o.artist) e.addFields({ name: 'Artist', value: o.artist, inline: true })
+    if (o.obtain) e.addFields({ name: 'How to get', value: o.obtain, inline: true })
+    if (o.time && o.elite === undefined) e.addFields({ name: 'Released (EN)', value: `<t:${o.time}:D>`, inline: true })
+    e.addFields(
+      { name: 'Animated art', value: o.animated ? 'Yes · view it on Myrtle' : 'No', inline: true },
+      { name: 'Chibi animations', value: o.chibi.length ? o.chibi.join(', ') : 'Not available', inline: true },
+    )
+    e.setFooter({ text: `${FOOTER} · Chibi player on Myrtle: download as GIF/WebM there · Art © Hypergryph/Yostar` })
+    return i.editReply({ embeds: [e], components: skinButtons(op, o) })
+  }
+  const lines = list.map(o => {
+    const tags = [o.animated ? '✨ animated' : '', o.chibi.length ? '🐾 chibi' : ''].filter(Boolean).join(' · ')
+    const meta = o.elite !== undefined ? o.obtain : [o.line, o.obtain, o.artist && `art: ${o.artist}`].filter(Boolean).join(' · ')
+    return `**${o.name}**${tags ? ` (${tags})` : ''}\n${meta}`
+  })
+  const newest = [...list].filter(o => o.elite === undefined).pop() ?? list[list.length - 1]
+  const e = embed(`${op.name} · Outfits (${list.length})`)
+    .setURL(page)
+    .setDescription(clip(lines.join('\n'), 3800) + `\n\nUse \`/skin operator:${op.name} outfit:<name>\` to see one outfit's art.`)
+    .setImage(outfitArt(op.id, newest))
+    .addFields({ name: 'Animated art and chibis', value: 'Press **▶ Chibi player** below. Myrtle plays them live, and you can download a GIF or WebM there.' })
+    .setFooter({ text: `${FOOTER} · Picture: ${newest.name} · Art © Hypergryph/Yostar, hosted by myrtle.moe` })
+  return i.editReply({ embeds: [e], components: skinButtons(op) })
+}
+
+// ───────────────────────── /links /help ─────────────────────────
+
+async function cmdLinks(i: ChatInputCommandInteraction, eph: boolean) {
+  const e = embed('Arknights resources').setDescription(
+    [
+      '**Lore and story**',
+      `• [Arknights Wiki](${WIKI}): operators, characters, events, lore`,
+      `• [Timo's Story Reader](${TIMO}): every story script, art, music, voice lines`,
+      '',
+      '**Account and planning**',
+      `• [Myrtle](${MYRTLE}): roster tracker, community pull stats, DPS tool, squad builder · \`/myrtle\``,
+      '• [Penguin Statistics](https://penguin-stats.io): community drop rates',
+      '• [Arknights Toolbox](https://arkntools.app): material planner, recruit and base tools',
+      '',
+      '**Community sheets** (fan-made)',
+      '• [AK Tier List](https://docs.google.com/spreadsheets/d/1E7HmgKWiV8pKpJpvpVzziYxnaQTP01Vtw_PXEdL7XPA/edit) · `/tier`',
+      '• [DragonGJY module ratings](https://docs.google.com/spreadsheets/d/1A0_0XTAcDDtHkvyAwjTqEEzM8cf5h3E60u23ZVXw4eg/edit) · `/module`',
+      '• [PeterYR farming](https://docs.google.com/spreadsheets/d/1RRiTIYVUNUf-xW8ljAJdYEOuSo23lpjHkPa0-zuC_4k/htmlview) · `/farm`',
+      `• [RIIC base skill guide](${RIIC_URL}) · \`/base\``,
+      '• [TacticalBreakfast mastery guides](https://docs.google.com/spreadsheets/d/1iJF12O6QOba1dlUVmobwvc1eBZE7FRB6-tKxmZEcG1I/)',
+    ].join('\n'),
+  )
+  return i.reply({ embeds: [e], flags: ephFlag(eph) })
+}
+
+export type HelpEntry = { cmd: string; group: string; short: string; usage: string; detail: string; examples: string[] }
+const HELP: HelpEntry[] = [
+  {
+    cmd: 'prts',
+    group: 'Conversation (AI)',
+    short: 'Talk to PRTS: lore, game help, research, or just chat',
+    usage: '/prts message:<anything>',
+    detail:
+      'The only command answered by the AI. Ask about Arknights story and characters, game mechanics, or anything else. PRTS searches the wiki, the story scripts and the web when needed, and cites sources. Long questions may take a moment: a "Retrieving records..." reply comes first.',
+    examples: ['/prts message: What is Originium?', '/prts message: Explain the Kazdel civil war briefly', '/prts message: Good morning, PRTS'],
+  },
+  {
+    cmd: 'operator',
+    group: 'Arknights records',
+    short: 'Operator card: class, faction, tier, modules, art, links',
+    usage: '/operator name:<operator>',
+    detail:
+      'Shows rarity, class and branch, faction, position, tags, tier (AK Tier List), modules with DragonGJY ratings, whether they can be recruited, E2 art, and links to the wiki, Myrtle, story records and voice lines. Names autocomplete as you type. For non-operators (NPCs) it shows a wiki summary.',
+    examples: ['/operator name: Texas', '/operator name: Wang'],
+  },
+  {
+    cmd: 'tier',
+    group: 'Arknights records',
+    short: 'AK Tier List by tier, class or operator',
+    usage: '/tier [tier:<EX…C->] [class:<class>] [operator:<name>]',
+    detail:
+      'With no options it lists the top tiers (EX to A). Pick a tier, a class, or both to filter, or give one operator to see their rating. Fan-made list for the global server, assuming full investment. Updated live from the Google Sheet.',
+    examples: ['/tier', '/tier tier: S+', '/tier class: Medic', '/tier operator: Texas the Omertosa'],
+  },
+  {
+    cmd: 'module',
+    group: 'Arknights records',
+    short: 'Module ratings with pros and cons',
+    usage: '/module operator:<operator>',
+    detail:
+      'Shows each module of the operator with DragonGJY ratings: MR (module rating), IC (investment cost-efficiency), recommended level, priority, a quick summary, and pros and cons. Based on the CN server, which is ahead of global.',
+    examples: ["/module operator: Ch'en", '/module operator: Bagpipe'],
+  },
+  {
+    cmd: 'farm',
+    group: 'Arknights records',
+    short: 'Best stages to farm a material',
+    usage: '/farm material:<material>',
+    detail:
+      'Lists the 10 most sanity-efficient stages for a material, with efficiency relative to the best stage and the main drop rate. Data from the PeterYR sheet (Penguin Statistics). Materials autocomplete.',
+    examples: ['/farm material: Device', '/farm material: Orirock', '/farm material: RMA70-12'],
+  },
+  {
+    cmd: 'recruit',
+    group: 'Arknights records',
+    short: 'Recruitment tag calculator',
+    usage: '/recruit tag1:<tag> [tag2] [tag3] [tag4] [tag5]',
+    detail:
+      'Enter the tags shown in your recruitment slot (they autocomplete). PRTS lists every tag combination that guarantees a 4★ or better operator, assuming a 9:00:00 timer, plus 1★ Robot combos. If nothing is guaranteed, it says so.',
+    examples: ['/recruit tag1: Crowd-Control tag2: Melee', '/recruit tag1: Top Operator tag2: Defender'],
+  },
+  {
+    cmd: 'base',
+    group: 'Arknights records',
+    short: 'Base (RIIC) skills and team combos',
+    usage: '/base [operator:<name>] [team:<team>] [facility:<facility>]',
+    detail:
+      "operator: shows the operator's official base skills (with unlock level), notes from the RIIC guide, and the team combos they appear in. team: shows a combo's members, effect and explanation. facility: lists the combos for one facility. No option: an overview of all combos. Updated live from the RIIC Google Sheet.",
+    examples: ['/base operator: Proviso', '/base team: Vermeil Team (EXP)', '/base facility: Trading Post'],
+  },
+  {
+    cmd: 'wiki',
+    group: 'Arknights records',
+    short: 'Search arknights.wiki.gg',
+    usage: '/wiki query:<anything>',
+    detail: 'Finds the best matching wiki page, shows a short summary and links to related pages. Page titles autocomplete as you type.',
+    examples: ['/wiki query: Kazdel', '/wiki query: Originium'],
+  },
+  {
+    cmd: 'story',
+    group: 'Arknights records',
+    short: "Find a story chapter and link it in Timo's reader",
+    usage: '/story query:<stage code, title or event>',
+    detail: "Searches every EN story by stage code, title or event name, with a short synopsis and a link to read it in Timo's Story Reader.",
+    examples: ['/story query: 15-12', '/story query: Rewinding Breeze'],
+  },
+  {
+    cmd: 'skin',
+    group: 'Arknights records',
+    short: 'Operator outfits: art, artist, how to get, animated/chibi',
+    usage: '/skin operator:<operator> [outfit:<outfit>]',
+    detail:
+      'Without outfit: lists every outfit (default E0/E2 and all skins) with its line, how to get it and the artist, and marks which have animated art and chibi animations. With outfit: shows that outfit’s full official art, artist, release date and links. Outfits autocomplete once the operator is filled in. Animated art and chibis are viewed on the operator’s Myrtle page, which plays them live.',
+    examples: ['/skin operator: Reed the Flame Shadow', '/skin operator: Reed the Flame Shadow outfit: Summer Flowers FA075', '/skin operator: Necrass outfit: Default outfit (Elite 2)'],
+  },
+  {
+    cmd: 'myrtle',
+    group: 'Arknights records',
+    short: 'Myrtle.moe player profiles, rosters and leaderboard',
+    usage: '/myrtle profile|roster|pulls|inventory|lookback|showcase|enemies|plans [player:] [user:] · search name: · leaderboard [sort] [server] · link player: · unlink',
+    detail: [
+      'Reads public player data from [myrtle.moe](https://myrtle.moe) (players upload their own account there).',
+      '**/myrtle profile [player:] [user:]** level, server, UID, account score and grade, rank, score breakdown, support units, roster stats, account info and a link to the profile',
+      '**/myrtle roster [player:] [user:] [operator:] [sort:] [rarity:] [class:]** top builds (E2/level, potential, skill level, masteries, modules), or one operator’s build',
+      '**/myrtle pulls [player:] [user:] [banner:]** public headhunting history: pulls, 6★/5★ counts and rates, pity since last 6★, latest 6★ and 5★ (only if the player made pulls public)',
+      '**/myrtle inventory [player:] [user:] [item:]** public item inventory, highest rarity first, or only items matching a name',
+      '**/myrtle lookback [player:] [user:]** progress snapshots over time (operators, E2, masteries, modules, score) with changes between them',
+      '**/myrtle showcase [player:] [user:]** favourite operators, enemies and outfits, plus tier lists, from their profile showcase',
+      '**/myrtle enemies [player:] [user:] [enemy:]** enemy handbook progress, or whether they have met enemies matching a name',
+      '**/myrtle plans [player:] [user:]** public operator plans, grouped',
+      '**/myrtle search name:** find players by in-game name',
+      '**/myrtle leaderboard [sort:] [server:]** top 15 by total or one category',
+      '**/myrtle link player:** link your Discord account to your Myrtle profile, so profile/roster default to you and others can use `user:@you` · **/myrtle unlink** removes it',
+      '`player:` takes a name (it autocompletes), Name#1234, a UID or a myrtle.moe/user link. Private profiles and hidden fields are not shown.',
+    ].join('\n'),
+    examples: [
+      '/myrtle link player: Doctor#1234',
+      '/myrtle profile',
+      '/myrtle profile user: @Texas',
+      '/myrtle roster sort: mastery',
+      '/myrtle roster operator: Suzuran',
+      '/myrtle leaderboard sort: base_score',
+    ],
+  },
+  {
+    cmd: 'links',
+    group: 'Arknights records',
+    short: 'Useful Arknights sites and community sheets',
+    usage: '/links',
+    detail: 'Wiki, story reader, Myrtle, Penguin Statistics, planners, and the community sheets PRTS uses.',
+    examples: ['/links'],
+  },
+  {
+    cmd: 'roll',
+    group: 'Utilities',
+    short: 'Roll dice',
+    usage: '/roll [dice:<expression>] [reason:<text>]',
+    detail:
+      'Default 1d20. Supports several dice and modifiers (2d6+3, 1d20+1d4-1), keep highest/lowest (4d6kh3, 2d20kl1), and percentile (d%). Max 100 dice. Kept maximum rolls are bold, dropped dice are struck through.',
+    examples: ['/roll', '/roll dice: 2d6+3', '/roll dice: 4d6kh3 reason: Strength', '/roll dice: d%'],
+  },
+  {
+    cmd: 'coin',
+    group: 'Utilities',
+    short: 'Toss a coin (or several)',
+    usage: '/coin [count:<1-100>] [call:<heads|tails>]',
+    detail: 'Tosses one coin, or up to 100 with a heads/tails tally. Call it beforehand if you like.',
+    examples: ['/coin', '/coin call: Heads', '/coin count: 10'],
+  },
+  {
+    cmd: 'choose',
+    group: 'Utilities',
+    short: 'PRTS picks one option for you',
+    usage: '/choose options:<a | b | c>',
+    detail: 'Separate options with | or commas. PRTS picks one at random, without hesitation.',
+    examples: ['/choose options: tea | coffee | juice', '/choose options: farm 1-7, farm 4-6'],
+  },
+  {
+    cmd: 'music',
+    group: 'Audio',
+    short: 'Music player in your voice channel',
+    usage:
+      '/music play song:<link, search or file> | search | radio | artist | queue | history | skip count:<n> | skipto position:<n> | move from:<n> to:<n> | replay | pause | resume | loop | shuffle | remove | clear | stop | lyrics | nowplaying | list',
+    detail:
+      "Join a voice channel first. play accepts YouTube/SoundCloud links and playlists, Spotify track links, search words, uploaded audio files, or songs from the bot's music folder. Each song gets a now-playing panel with buttons; actions like skip or pause are logged publicly with who did them, and when everything has played the panel becomes a summary of the session. play has options shuffle and next (play right after the current song); replay queues a past song again; queue and history are private views of what is next and what was played. search lets you pick from results; radio plays similar songs; artist shuffles an artist; lyrics posts the lyrics in the chat (current song, or name a song and artist).",
+    examples: ['/music play song: arknights ost', '/music search query: lofi', '/music radio', '/music skip'],
+  },
+  {
+    cmd: 'status',
+    group: 'Utilities',
+    short: 'Is the narrative core online?',
+    usage: '/status',
+    detail:
+      'Shows whether the Claude Code narrator is connected, when the AI last replied, how many requests are waiting and the bot uptime. Only you can see the answer. It also shows which AI answers /prts and each module, and whether it can be reached.',
+    examples: ['/status'],
+  },
+  {
+    cmd: 'help',
+    group: 'Utilities',
+    short: 'This guide',
+    usage: '/help [command:<name>]',
+    detail: 'With no option: the list of all commands. With a command: details and examples.',
+    examples: ['/help', '/help command: recruit'],
+  },
+]
+// Fill the /help command:<choice> list from the table above (Discord allows 25 choices).
+const fillHelpChoices = () => {
+  ;(ARK_COMMANDS.find(c => c.name === 'help') as any).options[0].choices = HELP.slice(0, 25).map(h => ({ name: `/${h.cmd}`, value: h.cmd }))
+}
+fillHelpChoices()
+/** Other modules add their commands to /help here. */
+export function registerHelp(entries: HelpEntry[]): void {
+  const at = HELP.findIndex(h => h.cmd === 'status')
+  HELP.splice(at < 0 ? HELP.length : at, 0, ...entries)
+  fillHelpChoices()
+}
+
+async function cmdHelp(i: ChatInputCommandInteraction, eph: boolean) {
+  const which = i.options.getString('command')
+  if (which) {
+    const h = HELP.find(x => x.cmd === which)
+    if (h) {
+      const e = embed(`/${h.cmd}`)
+        .setDescription(h.detail)
+        .addFields({ name: 'Usage', value: '`' + h.usage + '`' }, { name: 'Examples', value: h.examples.map(x => '`' + x + '`').join('\n') })
+      if (!/\(AI\)/.test(h.group)) e.setFooter({ text: `${FOOTER} · Answered instantly by the bot (no AI)` })
+      return i.reply({ embeds: [e], flags: ephFlag(eph) })
+    }
+  }
+  const e = embed('PRTS function list').setDescription(
+    'All systems operational. Welcome home.\n`[ ]` = optional. Every command also has `private:` so that only you see the reply.\nFor details and examples: `/help command:<name>`.',
+  )
+  const groups = [...new Set(HELP.map(h => h.group))]
+  for (const g of groups) {
+    // Discord caps a field at 1024 characters, so long groups continue in a second field.
+    let chunk: string[] = [],
+      first = true
+    const flush = () => {
+      if (chunk.length) e.addFields({ name: first ? g : `${g} (cont.)`, value: chunk.join('\n') })
+      chunk = []
+      first = false
+    }
+    for (const h of HELP.filter(x => x.group === g)) {
+      const line = `**/${h.cmd}** · ${h.short}\n\`${clip(h.usage, 90)}\``
+      if ([...chunk, line].join('\n').length > 1000) flush()
+      chunk.push(line)
+    }
+    flush()
+  }
+  e.setFooter({ text: `${FOOTER} · Commands marked (AI) use the AI; everything else is answered instantly by the bot` })
+  return i.reply({ embeds: [e], flags: ephFlag(eph) })
+}
+
+// ───────────────────────── dispatch ─────────────────────────
+
+export async function handleArk(i: ChatInputCommandInteraction): Promise<void> {
+  const eph = i.options.getBoolean('private') ?? false
+  switch (i.commandName) {
+    case 'roll':
+      await cmdRoll(i, eph)
+      break
+    case 'coin':
+      await cmdCoin(i, eph)
+      break
+    case 'choose':
+      await cmdChoose(i, eph)
+      break
+    case 'operator':
+      await cmdOperator(i, eph)
+      break
+    case 'tier':
+      await cmdTier(i, eph)
+      break
+    case 'module':
+      await cmdModule(i, eph)
+      break
+    case 'farm':
+      await cmdFarm(i, eph)
+      break
+    case 'recruit':
+      await cmdRecruit(i, eph)
+      break
+    case 'wiki':
+      await cmdWiki(i, eph)
+      break
+    case 'story':
+      await cmdStory(i, eph)
+      break
+    case 'base':
+      await cmdBase(i, eph)
+      break
+    case 'skin':
+      await cmdSkin(i, eph)
+      break
+    case 'myrtle':
+      await cmdMyrtle(i, eph)
+      break
+    case 'links':
+      await cmdLinks(i, eph)
+      break
+    case 'help':
+      await cmdHelp(i, eph)
+      break
+  }
+}
+
+// Discord drops autocomplete answers after 3 seconds, so web lookups give up sooner.
+const AUTOCOMPLETE_TIMEOUT_MS = 2500
+
+type Choice = { name: string; value: string }
+
+// Pre-normalized lists, rebuilt only when the game data or the sheets change,
+// so a keystroke is a plain filter instead of re-normalizing every entry.
+let tagKeys: { of: unknown; list: [string, string][] } | null = null
+function recruitTagKeys(): [string, string][] {
+  if (!data) return []
+  if (tagKeys?.of !== data) tagKeys = { of: data, list: data.recruitTags.map(t => [normName(t), t] as [string, string]) }
+  return tagKeys.list
+}
+let teamKeys: { of: unknown; list: [string, Choice][] } | null = null
+function teamChoices(sh: Sheets): [string, Choice][] {
+  if (teamKeys?.of !== sh)
+    teamKeys = { of: sh, list: sh.teams.map(t => [normName(`${t.title} ${t.members}`), { name: clip(`${t.title} · ${t.facility}`, 100), value: clip(t.title, 100) }] as [string, Choice]) }
+  return teamKeys.list
+}
+let matKeys: { of: unknown; list: [string, Choice][] } | null = null
+function materialChoices(sh: Sheets): [string, Choice][] {
+  if (matKeys?.of !== sh) matKeys = { of: sh, list: [...sh.farm.values()].map(m => [normName(m.label), { name: m.label, value: m.label.replace(/ \(.*\)$/, '') }] as [string, Choice]) }
+  return matKeys.list
+}
+
+// Web-backed suggestions are remembered for a few minutes, so retyping or
+// backspacing does not repeat the request.
+const webSuggest = new Map<string, { at: number; choices: Choice[] }>()
+async function cachedSuggest(key: string, load: () => Promise<Choice[]>): Promise<Choice[]> {
+  const hit = webSuggest.get(key)
+  if (hit && Date.now() - hit.at < 5 * 60_000) return hit.choices
+  const choices = await load()
+  if (choices.length) {
+    if (webSuggest.size > 500) webSuggest.clear()
+    webSuggest.set(key, { at: Date.now(), choices })
+  }
+  return choices
+}
+
+export async function handleArkAutocomplete(i: AutocompleteInteraction): Promise<void> {
+  const f = i.options.getFocused(true)
+  const q = String(f.value ?? '')
+  let choices: Choice[] = []
+  ensureData()
+  if (f.name === 'name' || f.name === 'operator') {
+    let ops = findOps(q)
+    if (i.commandName === 'module') {
+      const sh = loadSheets()
+      if (sh) ops = ops.filter(o => sh.modules.has(normName(o.name))).concat(ops.filter(o => !sh.modules.has(normName(o.name))))
+    }
+    choices = ops.slice(0, 25).map(o => ({ name: `${o.name} · ${o.rarity}★ ${o.cls}`, value: o.name }))
+  } else if (f.name === 'team') {
+    const sh = loadSheets()
+    const n = normName(q)
+    if (sh)
+      choices = teamChoices(sh)
+        .filter(([k]) => !n || k.includes(n))
+        .slice(0, 25)
+        .map(x => x[1])
+  } else if (f.name === 'material') {
+    const sh = loadSheets()
+    const n = normName(q)
+    if (sh)
+      choices = materialChoices(sh)
+        .filter(([k]) => !n || k.includes(n))
+        .slice(0, 25)
+        .map(x => x[1])
+  } else if (f.name.startsWith('tag')) {
+    const n = normName(q)
+    const taken = new Set<string>()
+    for (let k = 1; k <= 5; k++) {
+      const v = i.options.getString(`tag${k}`)
+      if (v) taken.add(normName(v))
+    }
+    choices = recruitTagKeys()
+      .filter(([k]) => (!n || k.includes(n)) && (k === n || !taken.has(k)))
+      .slice(0, 25)
+      .map(([, t]) => ({ name: t, value: t }))
+  } else if (f.name === 'outfit' && i.commandName === 'skin') {
+    const op = findOps(i.options.getString('operator') ?? '', 1)[0]
+    if (op) {
+      const n = normName(q)
+      // The first load needs two web requests; give up in time and let it finish in the background for the next keystroke.
+      const list = await Promise.race([getOutfits(op.id).catch(() => [] as Outfit[]), new Promise<Outfit[]>(r => setTimeout(() => r([]), AUTOCOMPLETE_TIMEOUT_MS))])
+      choices = list
+        .filter(o => !n || normName(o.name).includes(n) || normName(o.line).includes(n))
+        .slice(0, 25)
+        .map(o => ({ name: clip(`${o.name}${o.line ? ' · ' + o.line : ''}${o.animated ? ' · animated' : ''}`, 100), value: clip(o.name, 100) }))
+    }
+  } else if (f.name === 'player' && i.commandName === 'myrtle') {
+    const name = q.trim().replace(/#\d*$/, '')
+    if (name.length >= 2 && !/^\d+$/.test(name) && !/myrtle\.moe/i.test(name)) {
+      choices = await cachedSuggest(`myrtle:${name.toLowerCase()}`, async () => {
+        const r = await myrtleSearch(name, 25, AUTOCOMPLETE_TIMEOUT_MS).catch(() => null)
+        return (r?.entries ?? []).map(u => ({ name: clip(`${tag(u)} · ${u.server} · Lv${u.level} · ${u.grade ?? '?'}`, 100), value: u.uid }))
+      })
+    }
+  } else if (f.name === 'query' && i.commandName === 'wiki' && q.trim().length >= 2) {
+    choices = await cachedSuggest(`wiki:${q.trim().toLowerCase()}`, async () => {
+      const r = await wikiApi({ action: 'opensearch', search: q, limit: '10' }, AUTOCOMPLETE_TIMEOUT_MS).catch(() => null)
+      return (r?.[1] ?? []).slice(0, 25).map((t: string) => ({ name: clip(t, 100), value: clip(t, 100) }))
+    })
+  }
+  await i.respond(choices).catch(() => {})
+}

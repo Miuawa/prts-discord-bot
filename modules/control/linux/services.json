@@ -1,0 +1,24 @@
+{
+  "_comment": "Services shown in PRTS Control, in start order. 'unit' is a systemd --user unit. Copy this file to ~/.config/prts-control/services.json to change it without editing the repo. 'confirm_stop' asks before stopping.",
+  "services": [
+    {
+      "unit": "llama-server.service",
+      "label": "Local model",
+      "detail": "llama-server, for the openai-compatible backend",
+      "when_off": "Backends set to openai-compatible (or auto, while Claude is off) get no answers from the local model. Frees its GPU memory."
+    },
+    {
+      "unit": "prts-bot.service",
+      "label": "Discord bot",
+      "detail": "Discord login, slash commands, music",
+      "when_off": "PRTS is offline on Discord: no slash commands, no music, no replies at all.",
+      "confirm_stop": true
+    },
+    {
+      "unit": "prts-narrator.service",
+      "label": "Claude narrator",
+      "detail": "Claude Code session for the claude-code backend",
+      "when_off": "Backends set to claude-code get an offline notice; with auto, the fallback model answers instead (if it is running)."
+    }
+  ]
+}

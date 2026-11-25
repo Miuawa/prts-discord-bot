@@ -1,0 +1,23 @@
+PRTS Discord bot
+Copyright 2026 Miuawa
+
+This product includes software developed by Anthropic, PBC.
+
+src/bot.ts and src/server.ts are based on the Discord channel
+plugin for Claude Code ("claude-channel-discord", from the
+anthropics/claude-plugins-official repository), Copyright 2026 Anthropic, PBC,
+licensed under the Apache License, Version 2.0. The access control (pairing,
+allowlists, access.json), message gating, permission relay and the reply /
+react / edit_message / download_attachment / fetch_messages tools come from
+that plugin. This project split it into a standalone bot (bot.ts) and a
+small MCP bridge (server.ts), and added slash commands, the Arknights tools,
+music, voice lines, API model backends and an add-on module system (with the
+optional roleplay module in modules/roleplay).
+The original files carried no per-file license headers.
+
+Disclaimer: this is an unofficial fan project. It is not affiliated with,
+endorsed by or sponsored by Anthropic, Discord, Hypergryph, Studio Montagne
+or Yostar. "Arknights" and "PRTS" are names from the game Arknights, whose
+rights belong to their owners. No game assets, story text or sprites are
+included in this repository; game data is fetched at runtime from public
+community mirrors and sites.

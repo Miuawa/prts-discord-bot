@@ -1,0 +1,23 @@
+# PRTS Discord bot (src/bot.ts): slash commands, music, and the bridge
+# the Claude narrator connects to. Linux version of windows/start-bot.bat.
+# Template: linux/install.sh fills in @ROOT@ and @BUN@.
+[Unit]
+Description=PRTS Discord bot
+After=network-online.target llama-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@ROOT@
+# PRTS_* settings (see .env.example). bot.ts also reads this file itself, and
+# ~/.claude/channels/discord/.env for the token.
+EnvironmentFile=-@ROOT@/.env
+ExecStartPre=@BUN@ install --no-summary
+ExecStart=@BUN@ src/bot.ts
+Restart=always
+RestartSec=10
+# Exit code 3 = another PRTS bot already holds the bridge port; don't loop.
+RestartPreventExitStatus=3
+
+[Install]
+WantedBy=default.target

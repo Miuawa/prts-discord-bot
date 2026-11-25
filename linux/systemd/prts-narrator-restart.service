@@ -1,0 +1,9 @@
+# Fresh narrator session (daily via the timer, or after
+# linux/restart-narrator.sh). Does nothing if the narrator is not running.
+# Template: linux/install.sh fills in @ROOT@.
+[Unit]
+Description=Restart the PRTS narrator with a fresh conversation
+
+[Service]
+Type=oneshot
+ExecStart=@ROOT@/linux/narrator-ctl.sh restart

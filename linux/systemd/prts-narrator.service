@@ -1,0 +1,19 @@
+# PRTS narrator: the Claude Code session, run inside tmux session
+# "prts-narrator" so you can watch it or type into it:
+#   tmux attach -t prts-narrator      (detach again with Ctrl-b d)
+# Linux version of windows/start-narrator.bat. Needs tmux and the claude CLI.
+# Template: linux/install.sh fills in @ROOT@ and @TMUX@.
+[Unit]
+Description=PRTS narrator (Claude Code in tmux)
+After=prts-bot.service
+
+[Service]
+Type=forking
+WorkingDirectory=@ROOT@
+ExecStart=@TMUX@ new-session -d -s prts-narrator -x 200 -y 50 @ROOT@/linux/narrator.sh
+ExecStop=-@ROOT@/linux/narrator-ctl.sh exit
+ExecStopPost=-@TMUX@ kill-session -t prts-narrator
+TimeoutStopSec=40
+
+[Install]
+WantedBy=default.target

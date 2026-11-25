@@ -1,0 +1,36 @@
+# Secrets and access state: never commit
+.env
+.env.*
+!.env.example
+*.env
+access.json
+bridge.key
+*token*
+*secret*
+*.pem
+*.key
+
+# Dependencies and generated files
+node_modules/
+__pycache__/
+*.pyc
+*.log
+*.tmp
+*.bak
+nul
+/cache/
+
+# Runtime state, logs, chat transcripts, handoffs
+logs/
+chat-logs/
+*handoff*.md
+narrator.wanted
+
+# Local data (pulled or private)
+data/sheets/*.txt
+data/stories.json
+/music/
+/roleplay-kit/
+
+# Local machine settings
+.claude/settings.local.json
