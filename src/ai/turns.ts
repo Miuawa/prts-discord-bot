@@ -22,6 +22,8 @@ export type TurnHooks = {
   prompt(ev: ChannelEvent, history: string): Prompt
   /** How a speaker is named in the history (default: the Discord username). */
   speaker?(username: string): string
+  /** Tidies the model's text before it is posted and stored (e.g. strips lines it should not write). */
+  clean?(ev: ChannelEvent, text: string): string
   /** Runs after the reply was posted. */
   after?(ev: ChannelEvent, userLine: string, reply: string, label: string): void
 }
@@ -185,6 +187,7 @@ async function runTurn(ev: ChannelEvent, backend: ApiBackend, cfg: AiConfig, hoo
   } finally {
     if (tick) clearInterval(tick)
   }
+  if (text && hooks.clean) text = hooks.clean(ev, text)
   if (!text) text = '[PRTS] ...... No output was produced. Please try again.'
   push(key, { role: 'assistant', content: text })
   for (const part of splitForDiscord(text)) {

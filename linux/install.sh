@@ -27,6 +27,7 @@ done
 BUN="$(command -v bun || true)"
 TMUX_BIN="$(command -v tmux || true)"
 LLAMA_BIN="$(command -v llama-server || echo /usr/bin/llama-server)"
+SWAP_BIN="$(command -v llama-swap || true)"
 [ -n "$BUN" ] || { echo "bun not found on PATH (https://bun.sh)" >&2; exit 1; }
 [ "$NARRATOR" = 0 ] || [ -n "$TMUX_BIN" ] || echo "warning: tmux not found; prts-narrator.service needs it (or use --no-narrator)" >&2
 
@@ -37,6 +38,8 @@ MODULES="${PRTS_MODULES:-$(sed -n 's/^PRTS_MODULES=//p' "$ROOT/.env" | tail -1)}
 units=("$DIR"/systemd/prts-bot.service)
 [ "$NARRATOR" = 1 ] && units+=("$DIR"/systemd/prts-narrator*.service "$DIR"/systemd/prts-narrator*.timer)
 [ "$LLAMA" = 1 ] && units+=("$DIR"/systemd/llama-server.service)
+# llama-swap (several local models on one address) when it is installed.
+[ "$LLAMA" = 1 ] && [ -n "$SWAP_BIN" ] && units+=("$DIR"/systemd/llama-swap.service)
 for m in ${MODULES//,/ }; do
   for u in "$ROOT/modules/$m/linux/systemd/"*.service "$ROOT/modules/$m/linux/systemd/"*.timer; do
     [ -f "$u" ] && units+=("$u")
@@ -49,7 +52,7 @@ for u in "${units[@]}"; do
   # Render to a temporary file, then move it into place. mv replaces a symlink
   # left by an older install instead of writing through it (which would empty
   # the template it points to).
-  sed -e "s|@ROOT@|$ROOT|g" -e "s|@BUN@|$BUN|g" -e "s|@TMUX@|${TMUX_BIN:-/usr/bin/tmux}|g" -e "s|@LLAMA_SERVER@|$LLAMA_BIN|g" \
+  sed -e "s|@ROOT@|$ROOT|g" -e "s|@BUN@|$BUN|g" -e "s|@TMUX@|${TMUX_BIN:-/usr/bin/tmux}|g" -e "s|@LLAMA_SERVER@|$LLAMA_BIN|g" -e "s|@LLAMA_SWAP@|${SWAP_BIN:-/usr/bin/llama-swap}|g" \
     "$u" >"$dest.new"
   [ -s "$dest.new" ] || { echo "error: rendering $u gave an empty file" >&2; exit 1; }
   mv -f "$dest.new" "$dest"

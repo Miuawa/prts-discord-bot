@@ -1,0 +1,25 @@
+# Optional: llama-swap in front of llama-server, so several local models share
+# one address and the GPU (one model loaded at a time, picked by the "model"
+# name in each request, unloaded after its ttl). Use it instead of
+# llama-server.service, not together with it (same port).
+#
+# Config: ~/.config/llama-swap/config.yaml (example: docs/llama-swap.example.yaml).
+# Address: LLAMA_HOST / LLAMA_PORT from the repo's .env (default 127.0.0.1:8081).
+# Installed by linux/install.sh when llama-swap is on PATH.
+[Unit]
+Description=llama-swap: local models on demand for PRTS, OpenCode and OpenWebUI
+Wants=network-online.target
+After=network-online.target
+Conflicts=llama-server.service
+
+[Service]
+Type=simple
+Environment=LLAMA_HOST=127.0.0.1 LLAMA_PORT=8081
+EnvironmentFile=-@ROOT@/.env
+ExecStartPre=/bin/sh -c 'case "${LLAMA_HOST}" in 127.*|0.0.0.0|localhost|::1) exit 0;; esac; for i in $$(seq 1 60); do ip -o addr 2>/dev/null | grep -q " ${LLAMA_HOST}/" && exit 0; sleep 2; done; echo "address ${LLAMA_HOST} is not up"; exit 1'
+ExecStart=@LLAMA_SWAP@ -config %h/.config/llama-swap/config.yaml -listen ${LLAMA_HOST}:${LLAMA_PORT}
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=default.target

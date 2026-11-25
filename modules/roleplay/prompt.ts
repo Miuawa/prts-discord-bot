@@ -125,15 +125,17 @@ export function roleplayPrompt(ev: ChannelEvent, history: string): Prompt {
       `- Player characters${players.length ? ` (${players.map(([, c]) => c).join(', ')})` : ''} belong to their players. Never write their dialogue, choices or feelings, except the words the player just wrote and small gestures. Narrate everyone else.`,
       '- The fact-check (if any) is the last thing in a turn. Write nothing after it: no footers, no OOC notes, no system lines.',
       '- If the message addresses another player character directly and that player has not answered yet, reply with one short line such as *(Waiting for <character>...)* instead of a full turn, unless the player wrote "go on" or "continue".',
-      ...(m.afk ? [`- Away players (play them yourself with small, safe actions; still give them a choice block): ${m.afk}`] : []),
     ].join('\n'),
   )
   blocks.push(section(md, 'Local model notes'))
+  // Everything above is the same every turn, so llama-server can reuse it from its prompt
+  // cache. What changes (away players, profiles, story log) comes after.
+  if (m.afk) blocks.push(`Away players (play them yourself with small, safe actions; still give them a choice block): ${m.afk}`)
 
   const narrator = profileExcerpt(NARRATOR_PROFILE, 'voice')
   if (narrator) blocks.push('Narrator voice reference:\n' + narrator)
   const inPlay = players.map(([, c]) => c).filter(c => profiles().some(x => x.name === c))
-  const names = [...new Set([...inPlay, ...mentioned(`${ev.content}\n${history.slice(-1500)}`)])].filter(n => n !== NARRATOR_PROFILE).slice(0, MAX_PROFILES)
+  const names = [...new Set([...inPlay, ...mentioned(`${ev.content}\n${history.slice(-1500)}`).sort()])].filter(n => n !== NARRATOR_PROFILE).slice(0, MAX_PROFILES)
   if (names.length)
     blocks.push(
       'Character profiles:\n\n' +
@@ -142,7 +144,9 @@ export function roleplayPrompt(ev: ChannelEvent, history: string): Prompt {
           .filter(Boolean)
           .join('\n\n---\n\n'),
     )
-  const f = storyLogFile()
+  // The story log tail changes every turn, which would make the model re-read the whole
+  // history after it. Once the channel history itself is long enough, it carries the story.
+  const f = history.length < 6000 ? storyLogFile() : null
   const tail = f ? readText(f).slice(-STORY_TAIL_CHARS) : ''
   if (tail.trim()) blocks.push(`Recent story log (${f!.split(/[\\/]/).pop()}):\n[...]${tail}`)
   return { system: blocks.filter(Boolean).join('\n\n'), maxTokens: MAX_TOKENS_RP }
@@ -168,4 +172,30 @@ export function appendStoryLog(ev: ChannelEvent, userLine: string, text: string,
   } catch (e) {
     process.stderr.write(`prts roleplay: story log append failed: ${e}\n`)
   }
+}
+
+/**
+ * Guard for small models: drop dialogue lines written for player characters
+ * ("**Texas:** ..." or "Texas: ..."), unless that player is away (/rp afk).
+ * Player characters' words belong to their players; the rules say so, but
+ * 8-12B models often ignore it.
+ */
+export function stripPlayerLines(ev: ChannelEvent, text: string): string {
+  const away = new Set((ev.meta.afk ?? '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean))
+  const names = readPlayers()
+    .map(([, c]) => c)
+    .filter(c => c && !away.has(c.toLowerCase()))
+  if (!names.length) return text
+  const alt = names.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
+  // Optional quote/bullet, optional bold/italic, the name, optional "(...)" aside, a colon, then speech.
+  const re = new RegExp(`^\\s*(?:[>*_-]\\s*)*(?:\\*\\*|__)?\\s*(?:${alt})\\s*(?:\\([^)]*\\))?\\s*(?::\\s*(?:\\*\\*|__)|(?:\\*\\*|__)\\s*:|:)\\s*\\S`, 'i')
+  let dropped = 0
+  const out = text.split('\n').filter(l => {
+    if (!re.test(l)) return true
+    dropped++
+    return false
+  })
+  if (!dropped) return text
+  process.stderr.write(`prts roleplay: removed ${dropped} line(s) written for player characters\n`)
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim()
 }

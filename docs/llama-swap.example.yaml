@@ -1,0 +1,46 @@
+# Example llama-swap config: several local models behind one OpenAI-compatible
+# address. Copy to ~/.config/llama-swap/config.yaml, fix the paths, and use
+# linux/systemd/llama-swap.service (installed by linux/install.sh when
+# llama-swap is on PATH) instead of llama-server.service.
+#
+# Each app picks a model by name ("model" in the request). Only one runs at a
+# time; switching takes 5-20 s. A model unloads after `ttl` seconds without
+# requests, so an idle GPU uses no memory.
+#
+# The PRTS bot asks for the model in PRTS_MODEL / RP_MODEL, or "local" when
+# unset; the alias below makes "local" the roleplay model.
+#
+# Measured on an RTX 3070 Ti (8 GB) with 15 GB RAM, llama.cpp build 12359:
+#   Qwen3.5 9B Q4_K_M, 24k context, all on GPU        ~75-80 tokens/s
+#   Qwen3.6 35B-A3B IQ3_XXS, 32k, --n-cpu-moe 25      ~32-36 tokens/s, prompt ~550 tokens/s
+#   (lower --n-cpu-moe = more on the GPU = faster, until it runs out of VRAM;
+#    24 was the limit here, 25 leaves room for the desktop)
+#   A 0.8B draft model (speculative decoding) made roleplay ~2x slower: skip it.
+#   Mistral-Nemo 12B with a 16k context did not fit in 8 GB: ~10 tokens/s.
+
+healthCheckTimeout: 300
+
+macros:
+  common: >-
+    /usr/bin/llama-server --host 127.0.0.1 --port ${PORT}
+    --parallel 1 --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 -t 4
+
+models:
+  # PRTS Discord bot (roleplay + /prts), with image support (--mmproj).
+  prts-rp:
+    name: "PRTS roleplay (Qwen3.5 9B)"
+    aliases: [local]
+    ttl: 600
+    cmd: >-
+      ${common} -m /home/YOU/models/Qwen3.5-9B-Q4_K_M.gguf
+      --mmproj /home/YOU/models/Qwen3.5-9B-mmproj-F16.gguf --image-max-tokens 1024
+      -c 24576 -ngl 99
+
+  # A coding agent such as OpenCode. Mixture-of-experts model: part of the
+  # expert weights stay in RAM (--n-cpu-moe), the rest on the GPU.
+  coder:
+    name: "Coding agent (Qwen3.6 35B-A3B)"
+    ttl: 600
+    cmd: >-
+      ${common} -m /home/YOU/models/Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf
+      -c 32768 -ngl 99 --n-cpu-moe 25

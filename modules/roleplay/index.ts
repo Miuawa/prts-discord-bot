@@ -6,7 +6,7 @@
 import type { HelpEntry, PrtsModule } from '../../src/modules.ts'
 import { readAiConfig } from '../../src/modules.ts'
 import { RP_COMMAND, RP_AI_SUBCOMMANDS, handleRpLocal, rpState, afkCharacters, clearAfk, noteRpMessage, noteNarratorTurn, nudgeTick, readPlayers } from './rp.ts'
-import { roleplayPrompt, appendStoryLog } from './prompt.ts'
+import { roleplayPrompt, appendStoryLog, stripPlayerLines } from './prompt.ts'
 
 const HELP: HelpEntry = {
   cmd: 'rp',
@@ -48,6 +48,7 @@ export default function roleplay(): PrtsModule {
         const c = readPlayers().find(([u]) => u.toLowerCase() === username.toLowerCase())?.[1]
         return c ? `${c} (${username})` : username
       },
+      clean: process.env.RP_STRIP_PLAYER_LINES === 'off' ? undefined : stripPlayerLines,
       after: appendStoryLog,
     },
     init(client) {
