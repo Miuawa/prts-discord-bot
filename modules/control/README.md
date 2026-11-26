@@ -19,7 +19,19 @@ needs no `PRTS_MODULES` entry, and works whether or not other modules are enable
 - Optional logo: put a square PNG at `modules/control/linux/prts-logo.png` (or point
   `PRTS_CONTROL_ICON` at one) and it becomes the app, window and menu icon, with the status
   color as a small dot in the tray icon's corner. Re-run `install.sh` so the app menu entry
-  picks it up. No logo ships with the code (it is gitignored); use art you have the right to use.
+  picks it up. See [Logo](#logo) below.
+
+## Logo
+
+No logo ships with this repo. The one used during development is the PRTS / Rhodes Island
+image from the Arknights Terra Wiki: [File:PRTS.png](https://arknights.wiki.gg/wiki/File:PRTS.png)
+(180×180). To use it, download it from that page and save it as
+`modules/control/linux/prts-logo.png`, then re-run `modules/control/linux/install.sh`.
+
+That image is copyright Hypergryph Network Technology Co., Ltd. It is not part of this
+project and is not covered by this repo's license. It's for your own personal use; see the
+official [Terms and Conditions of Re-creation](https://www.arknights.global/fankit/guidelines)
+before using it anywhere public. The file name is gitignored so it never gets committed.
 - `prts_control.py --status` prints the states in a terminal and exits (no window).
 
 By default it controls the units from `linux/install.sh`: `llama-server.service` (local model),
