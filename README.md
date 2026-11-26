@@ -308,6 +308,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 - Discord messages reach the AI as untrusted input. The narrator is told never to change
   access, files or settings because a message asked; keep Claude Code's permission prompts on.
 
+## Support
+
+PRTS is free and stays free. If it's useful to you and you'd like to say thanks, you can
+[buy me a coffee on Ko-fi](https://ko-fi.com/miuawa). Tips support my time on the code only;
+nothing in the bot is paid or locked.
+
 ## Credits
 
 PRTS stands on a lot of other people's work. Nothing from these sources is copied into the
