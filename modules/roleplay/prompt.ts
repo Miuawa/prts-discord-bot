@@ -181,7 +181,12 @@ export function appendStoryLog(ev: ChannelEvent, userLine: string, text: string,
  * 8-12B models often ignore it.
  */
 export function stripPlayerLines(ev: ChannelEvent, text: string): string {
-  const away = new Set((ev.meta.afk ?? '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean))
+  const away = new Set(
+    (ev.meta.afk ?? '')
+      .split(',')
+      .map(s => s.trim().toLowerCase())
+      .filter(Boolean),
+  )
   const names = readPlayers()
     .map(([, c]) => c)
     .filter(c => c && !away.has(c.toLowerCase()))
@@ -197,5 +202,8 @@ export function stripPlayerLines(ev: ChannelEvent, text: string): string {
   })
   if (!dropped) return text
   process.stderr.write(`prts roleplay: removed ${dropped} line(s) written for player characters\n`)
-  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+  return out
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }

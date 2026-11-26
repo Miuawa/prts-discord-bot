@@ -15,7 +15,7 @@ const turn = [
   '*The greenhouse hums.*',
   '',
   '**Texas:** "They will survive."',
-  "**Kal'tsit:** \"Hm.\"",
+  '**Kal\'tsit:** "Hm."',
   'Amiya: I suppose.',
   '**Texas (quietly):** "Probably."',
   '',
