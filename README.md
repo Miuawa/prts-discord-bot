@@ -308,6 +308,62 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 - Discord messages reach the AI as untrusted input. The narrator is told never to change
   access, files or settings because a message asked; keep Claude Code's permission prompts on.
 
+## Credits
+
+PRTS stands on a lot of other people's work. Nothing from these sources is copied into the
+repo: the bot fetches from them at runtime or links to them. Thank you to all of them.
+
+**Arknights**
+
+- [Arknights](https://www.arknights.global) by Hypergryph and Studio Montagne, published
+  worldwide by Yostar. The game, its characters, story, art, music and the PRTS name belong
+  to them.
+
+**Game data and story**
+
+- [Timo's Arknights story reader](https://arknights.timo.beer): story pages and voice lines
+  (`/story` and voice lines).
+- [Arknights Terra Wiki](https://arknights.wiki.gg): `/wiki` search and character lookups.
+- [ArknightsAssets/ArknightsGamedata](https://github.com/ArknightsAssets/ArknightsGamedata):
+  English game data tables (operators, modules, factions, recruitment).
+- [yuanyan3060/ArknightsGameResource](https://github.com/yuanyan3060/ArknightsGameResource):
+  operator avatars.
+- [Myrtle](https://myrtle.moe): player profiles for `/myrtle`, and operator art through its
+  asset CDN.
+
+**Community guides** (fan-made Google Sheets)
+
+- [AK Tier List](https://docs.google.com/spreadsheets/d/1E7HmgKWiV8pKpJpvpVzziYxnaQTP01Vtw_PXEdL7XPA/edit) (`/tier`)
+- [DragonGJY's module ratings](https://docs.google.com/spreadsheets/d/1A0_0XTAcDDtHkvyAwjTqEEzM8cf5h3E60u23ZVXw4eg/edit) (`/module`)
+- [PeterYR's farming sheet](https://docs.google.com/spreadsheets/d/1RRiTIYVUNUf-xW8ljAJdYEOuSo23lpjHkPa0-zuC_4k/htmlview) (`/farm`)
+- [RIIC base skill guide](https://docs.google.com/spreadsheets/d/1zYc2JU46X0XWmV7s1503bN4feRdOMa1eehrTQ2jGaiE/edit) (`/base`)
+- Linked from `/links`: [Penguin Statistics](https://penguin-stats.io),
+  [Arknights Toolbox](https://arkntools.app) and
+  [TacticalBreakfast's mastery guides](https://docs.google.com/spreadsheets/d/1iJF12O6QOba1dlUVmobwvc1eBZE7FRB6-tKxmZEcG1I/).
+
+**Music and lyrics**
+
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) finds and streams the audio, and
+  [FFmpeg](https://ffmpeg.org) decodes it. Songs come from wherever the link points
+  (YouTube, SoundCloud, Bandcamp and so on); Spotify links are matched through Spotify's
+  public oEmbed page.
+- Lyrics: [LRCLib](https://lrclib.net), [Genius](https://genius.com),
+  [Musixmatch](https://www.musixmatch.com) and YouTube Music.
+
+**Software**
+
+- Anthropic's [Claude Code](https://code.claude.com) and its Discord channel plugin, which
+  `src/bot.ts` and `src/server.ts` are based on (see [NOTICE](NOTICE)).
+- [discord.js](https://discord.js.org) and `@discordjs/voice`, the
+  [Model Context Protocol SDK](https://github.com/modelcontextprotocol/typescript-sdk),
+  the [Anthropic SDK](https://github.com/anthropics/anthropic-sdk-typescript),
+  [Zod](https://zod.dev), opusscript and `@snazzah/davey`, run on [Bun](https://bun.sh).
+- Local models: any OpenAI-compatible server, such as
+  [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server`.
+
+Optional extras you add yourself, such as the PRTS Control logo
+([modules/control](modules/control/README.md#logo)), stay under their owners' rights.
+
 ## License
 
 Apache License 2.0, see [LICENSE](LICENSE). `src/bot.ts` and `src/server.ts` are based on
