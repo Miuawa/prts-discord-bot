@@ -1,5 +1,5 @@
 {
-  "_comment": "Services shown in PRTS Control, in start order. 'unit' is a systemd --user unit. Copy this file to ~/.config/prts-control/services.json to change it without editing the repo. 'confirm_stop' asks before stopping.",
+  "_comment": "Services shown in PRTS Control, in start order. 'unit' is a systemd --user unit. Copy this file to ~/.config/prts-control/services.json to change it without editing the repo. 'confirm_stop' asks before stopping. 'terminal' adds a Terminal button that runs this command in a terminal window.",
   "services": [
     {
       "unit": "llama-server.service",
@@ -18,7 +18,9 @@
       "unit": "prts-narrator.service",
       "label": "Claude narrator",
       "detail": "Claude Code session for the claude-code backend",
-      "when_off": "Backends set to claude-code get an offline notice; with auto, the fallback model answers instead (if it is running)."
+      "when_off": "Backends set to claude-code get an offline notice; with auto, the fallback model answers instead (if it is running).",
+      "terminal": "tmux attach -t prts-narrator",
+      "terminal_hint": "Opens the narrator's live Claude Code screen. Close the window or press Ctrl+B then D to leave it running. Anything you type goes to the narrator."
     }
   ]
 }

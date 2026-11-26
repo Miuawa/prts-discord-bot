@@ -25,7 +25,7 @@ while true; do
     FIRST=("Session restarted. Read logs/restart-handoff.md, rename it to restart-handoff.used.md, then post here a short recap of the previous chat: what was done and anything still open.")
   fi
   echo "$(date '+%F %T') narrator starting" >>"$LOG"
-  claude "${FIRST[@]}" --model "$MODEL" --remote-control "PRTS narrator" --dangerously-load-development-channels server:discord
+  claude "${FIRST[@]}" --model "$MODEL" --dangerously-load-development-channels server:discord
   code=$?
   echo "$(date '+%F %T') narrator exited with code $code" >>"$LOG"
   [ "$code" -eq 0 ] && exit 0

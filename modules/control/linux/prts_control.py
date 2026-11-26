@@ -314,6 +314,11 @@ class Window(QWidget):
             logs.clicked.connect(lambda _=False, s=s: app.show_logs([s]))
             for c, w in enumerate((dot, name, status, btn, login, logs)):
                 grid.addWidget(w, r, c)
+            if s.get("terminal"):
+                term = QPushButton("Terminal")
+                term.setToolTip(s.get("terminal_hint", s["terminal"]))
+                term.clicked.connect(lambda _=False, s=s: app.open_terminal(s))
+                grid.addWidget(term, r, 6)
             self.rows[s["unit"]] = (dot, status, btn, login)
         grid.setColumnStretch(1, 1)
         outer.addLayout(grid)
@@ -389,6 +394,9 @@ class Control:
         logs.addSeparator()
         for s in self.services:
             logs.addAction(s["label"], lambda s=s: self.show_logs([s]))
+        for s in self.services:
+            if s.get("terminal"):
+                self.menu.addAction(f"{s['label']} terminal", lambda s=s: self.open_terminal(s))
         self.log_windows = {}
         self.menu.addSeparator()
         self.menu.addAction("Open PRTS Control", self.show_window)
@@ -410,6 +418,28 @@ class Control:
         self.window.show()
         self.window.raise_()
         self.window.activateWindow()
+
+    def open_terminal(self, s):
+        """Runs the service's 'terminal' command in a terminal window ($TERMINAL or the first one found)."""
+        import shutil
+        cmd = s["terminal"]
+        choices = [os.environ.get("TERMINAL", ""), "konsole", "kitty", "alacritty", "gnome-terminal", "xfce4-terminal", "foot", "wezterm", "xterm"]
+        for t in filter(None, choices):
+            path = shutil.which(t)
+            if not path:
+                continue
+            base = os.path.basename(path)
+            if base == "gnome-terminal":
+                argv = ["--", "sh", "-c", cmd]
+            elif base in ("kitty", "foot"):
+                argv = ["sh", "-c", cmd]
+            elif base == "wezterm":
+                argv = ["start", "--", "sh", "-c", cmd]
+            else:
+                argv = ["-e", "sh", "-c", cmd]
+            QProcess.startDetached(path, argv)
+            return
+        QMessageBox.warning(None, "PRTS Control", f"No terminal program found. Run this yourself:\n\n{cmd}")
 
     def show_logs(self, services):
         units = tuple(s["unit"] for s in services)

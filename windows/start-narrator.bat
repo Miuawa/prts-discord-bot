@@ -22,7 +22,7 @@ rem new session shows a recap of the previous chat right away.
 set "FIRSTMSG="
 powershell -NoProfile -Command "$f='%ROOT%\logs\restart-handoff.md'; if ((Test-Path $f) -and ((Get-Date)-(Get-Item $f).LastWriteTime).TotalMinutes -lt 15) { exit 1 }"
 if errorlevel 1 set FIRSTMSG="Session restarted. Read logs/restart-handoff.md, rename it to restart-handoff.used.md, then post here a short recap of the previous chat: what was done and anything still open."
-claude %FIRSTMSG% --model %PRTS_NARRATOR_MODEL% --remote-control "PRTS narrator" --dangerously-load-development-channels server:discord
+claude %FIRSTMSG% --model %PRTS_NARRATOR_MODEL% --dangerously-load-development-channels server:discord
 rem A clean exit (for example /exit) means it was closed on purpose, so the watchdog leaves it alone.
 if %errorlevel%==0 del "%ROOT%\logs\narrator.wanted" >nul 2>&1
 echo.

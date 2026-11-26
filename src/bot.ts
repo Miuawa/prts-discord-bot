@@ -663,6 +663,18 @@ export const aiOnline = () => bridge !== null
 // named in meta.module) decide whether it goes to the Claude Code narrator or
 // to an API model. Rejects when it should go to Claude and no session is
 // connected. Permission events always go to Claude.
+// PRTS_LOG_CHATS=1 writes each message sent to the AI and each AI reply to the bot's log
+// (journalctl / PRTS Control "Logs"), so the conversation can be followed without opening
+// the narrator session. Off by default: it puts Discord messages in the log.
+const LOG_CHATS = /^(1|true|on|yes)$/i.test(process.env.PRTS_LOG_CHATS ?? '')
+const oneLine = (s: string, n = 400) => {
+  const t = s.replace(/\s+/g, ' ').trim()
+  return t.length > n ? t.slice(0, n - 1) + '…' : t
+}
+function logChat(line: string): void {
+  if (LOG_CHATS) process.stderr.write(`prts chat: ${line}\n`)
+}
+
 function emit(n: { method: string; params: unknown }): Promise<void> {
   if (n.method === 'notifications/claude/channel') {
     const { images, ...forClaude } = n.params as { content: string; meta: Record<string, string>; images?: ImageRef[] }
@@ -671,13 +683,18 @@ function emit(n: { method: string; params: unknown }): Promise<void> {
     const mod = p.meta.module ? moduleByName.get(p.meta.module) : undefined
     const cfg = aiFor(mod)
     const api = apiBackendFor(cfg, bridge !== null)
+    const where = p.meta.command ? `/${p.meta.command}${p.meta.subcommand ? ' ' + p.meta.subcommand : ''}` : `#${p.meta.chat_id}`
+    logChat(`${p.meta.user ?? '?'} in ${where} → ${api ? (cfg.label ?? api) : bridge ? 'narrator' : 'nobody (offline)'}: ${oneLine(p.content)}`)
     if (api) {
       void handleApiTurn(
         p,
         api,
         cfg,
         hooksFor(mod),
-        (chat_id, text) => runTool('reply', { chat_id, text }),
+        (chat_id, text) => {
+          logChat(`${cfg.label ?? api} replied in ${chat_id}: ${oneLine(text)}`)
+          return runTool('reply', { chat_id, text })
+        },
         () => {
           if (p.meta.chat_id.startsWith(SLASH_PREFIX)) return
           void fetchTextChannel(p.meta.chat_id)
@@ -722,6 +739,11 @@ if (!DRY_RUN)
           if (m.type === 'call') {
             const result = await runTool(String(m.name), (m.args ?? {}) as Record<string, unknown>)
             if (m.name === 'reply' && !result.isError) recordAssistant(String(m.args?.chat_id ?? ''), String(m.args?.text ?? ''))
+            logChat(
+              m.name === 'reply'
+                ? `narrator replied in ${m.args?.chat_id ?? '?'}${result.isError ? ' (failed)' : ''}: ${oneLine(String(m.args?.text ?? ''))}`
+                : `narrator used ${m.name}${result.isError ? ' (failed)' : ''}`,
+            )
             try {
               ws.send(JSON.stringify({ type: 'result', id: m.id, result }))
             } catch {}
