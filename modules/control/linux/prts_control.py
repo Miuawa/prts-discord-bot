@@ -7,7 +7,8 @@ else the one next to this file. By default: the local model (llama-server),
 the Discord bot and the Claude Code narrator.
 
   Click the tray icon        open the window
-  Right-click the tray icon  quick menu (toggle each service, start all, stop all)
+  Right-click the tray icon  quick menu (toggle each service, start all, stop all, logs)
+  Logs button / menu         live journal of a service, or of all of them together
 
 Run with --status to print the state of each service and exit (no window).
 """
@@ -15,6 +16,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -70,16 +72,18 @@ if "--status" in sys.argv:
     sys.exit(0)
 
 try:
-    from PyQt6.QtCore import Qt, QTimer, QLockFile, QDir
-    from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QAction
+    from PyQt6.QtCore import Qt, QTimer, QLockFile, QDir, QProcess
+    from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QAction, QFontDatabase
     from PyQt6.QtWidgets import (QApplication, QSystemTrayIcon, QMenu, QWidget, QLabel, QPushButton,
-                                 QCheckBox, QGridLayout, QVBoxLayout, QHBoxLayout, QMessageBox, QFrame)
+                                 QCheckBox, QGridLayout, QVBoxLayout, QHBoxLayout, QMessageBox, QFrame,
+                                 QPlainTextEdit, QComboBox, QLineEdit)
 except ImportError:
     try:
-        from PySide6.QtCore import Qt, QTimer, QLockFile, QDir
-        from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QAction
+        from PySide6.QtCore import Qt, QTimer, QLockFile, QDir, QProcess
+        from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QAction, QFontDatabase
         from PySide6.QtWidgets import (QApplication, QSystemTrayIcon, QMenu, QWidget, QLabel, QPushButton,
-                                       QCheckBox, QGridLayout, QVBoxLayout, QHBoxLayout, QMessageBox, QFrame)
+                                       QCheckBox, QGridLayout, QVBoxLayout, QHBoxLayout, QMessageBox, QFrame,
+                                       QPlainTextEdit, QComboBox, QLineEdit)
     except ImportError:
         msg = ("PRTS Control needs PyQt6 (or PySide6). Install it from your distribution, for example\n"
                "  Arch: sudo pacman -S python-pyqt6    Debian/Ubuntu: sudo apt install python3-pyqt6\n"
@@ -114,6 +118,139 @@ def dot_icon(color, size=64, ring=None):
     return QIcon(pm)
 
 
+LEVELS = [("Everything", None), ("Warnings and errors", "warning"), ("Errors only", "err")]
+LEVEL_COLORS = {0: RED, 1: RED, 2: RED, 3: RED, 4: YELLOW}
+MAX_LOG_LINES = 5000
+
+
+class LogWindow(QWidget):
+    """Live `journalctl --user -f` view of one or more units. Stops following while hidden."""
+
+    def __init__(self, units, title):
+        super().__init__()
+        self.units = units
+        self.setWindowTitle(f"{title} - PRTS Control logs")
+        self.proc = None
+        self.buf = b""
+        self.paused = False
+        outer = QVBoxLayout(self)
+        bar = QHBoxLayout()
+        self.level = QComboBox()
+        for label, _ in LEVELS:
+            self.level.addItem(label)
+        self.level.currentIndexChanged.connect(self.restart)
+        self.filter = QLineEdit()
+        self.filter.setPlaceholderText("Filter (text to match)")
+        self.filter.setClearButtonEnabled(True)
+        self.filter.returnPressed.connect(self.restart)
+        self.pause_btn = QPushButton("Pause")
+        self.pause_btn.clicked.connect(self.toggle_pause)
+        clear = QPushButton("Clear")
+        clear.clicked.connect(lambda: self.view.clear())
+        copy = QPushButton("Copy all")
+        copy.clicked.connect(lambda: QApplication.clipboard().setText(self.view.toPlainText()))
+        for w in (self.level, self.filter, self.pause_btn, clear, copy):
+            bar.addWidget(w)
+        bar.setStretchFactor(self.filter, 1)
+        outer.addLayout(bar)
+        self.view = QPlainTextEdit()
+        self.view.setReadOnly(True)
+        self.view.setMaximumBlockCount(MAX_LOG_LINES)
+        self.view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.view.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        outer.addWidget(self.view)
+        self.status = QLabel()
+        self.status.setStyleSheet("color: gray")
+        outer.addWidget(self.status)
+        self.resize(1000, 560)
+
+    def command(self):
+        args = ["--user", "--follow", "--lines", "300", "--output", "json", "--no-pager"]
+        for u in self.units:
+            args += ["--unit", u]
+        prio = LEVELS[self.level.currentIndex()][1]
+        if prio:
+            args += ["--priority", prio]
+        if self.filter.text().strip():
+            args += ["--grep", self.filter.text().strip(), "--case-sensitive=false"]
+        return args
+
+    def restart(self):
+        self.stop()
+        self.view.clear()
+        self.buf = b""
+        self.proc = QProcess(self)
+        self.proc.readyReadStandardOutput.connect(self.read_out)
+        self.proc.readyReadStandardError.connect(
+            lambda: self.append(None, bytes(self.proc.readAllStandardError()).decode(errors="replace").strip(), 3))
+        self.proc.start("journalctl", self.command())
+        self.status.setText("Following " + ", ".join(self.units) + "  (journalctl --user)")
+
+    def stop(self):
+        if self.proc is not None:
+            self.proc.kill()
+            self.proc.waitForFinished(1000)
+            self.proc = None
+
+    def read_out(self):
+        if self.proc is None:
+            return
+        self.buf += bytes(self.proc.readAllStandardOutput())
+        *lines, self.buf = self.buf.split(b"\n")
+        for raw in lines:
+            if not raw.strip():
+                continue
+            try:
+                e = json.loads(raw)
+            except ValueError:
+                continue
+            msg = e.get("MESSAGE", "")
+            if isinstance(msg, list):  # journald sends non-UTF-8 messages as a byte array
+                msg = bytes(msg).decode(errors="replace")
+            try:
+                when = time.strftime("%H:%M:%S", time.localtime(int(e.get("__REALTIME_TIMESTAMP", "0")) / 1e6))
+            except ValueError:
+                when = ""
+            # USER_UNIT is set on systemd's own "Starting/Stopped" lines (which come from init.scope)
+            unit = e.get("USER_UNIT") or e.get("_SYSTEMD_USER_UNIT") or e.get("SYSLOG_IDENTIFIER", "")
+            prefix = f"{when} [{unit.removesuffix('.service')}] " if len(self.units) > 1 else f"{when} "
+            try:
+                prio = int(e.get("PRIORITY", 6))
+            except ValueError:
+                prio = 6
+            self.append(prefix, msg, prio)
+
+    def append(self, prefix, msg, prio):
+        if not msg or self.paused:
+            return
+        bar = self.view.verticalScrollBar()
+        at_bottom = bar.value() >= bar.maximum() - 4
+        color = LEVEL_COLORS.get(prio)
+        if prefix is None:
+            prefix = ""
+        if color:
+            esc = (prefix + msg).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            self.view.appendHtml(f"<span style='color:{color}; white-space:pre'>{esc}</span>")
+        else:
+            self.view.appendPlainText(prefix + msg)
+        if at_bottom:
+            bar.setValue(bar.maximum())
+
+    def toggle_pause(self):
+        self.paused = not self.paused
+        self.pause_btn.setText("Resume" if self.paused else "Pause")
+        self.status.setText(("Paused: new lines are skipped.  " if self.paused else "") + "Following " + ", ".join(self.units))
+
+    def showEvent(self, ev):
+        if self.proc is None:
+            self.restart()
+        super().showEvent(ev)
+
+    def closeEvent(self, ev):
+        self.stop()
+        ev.accept()
+
+
 class Window(QWidget):
     def __init__(self, app):
         super().__init__()
@@ -127,13 +264,17 @@ class Window(QWidget):
         for r, s in enumerate(app.services):
             dot = QLabel()
             name = QLabel(f"<b>{s['label']}</b><br><span style='color:gray'>{s.get('detail', s['unit'])}</span>")
+            name.setWordWrap(True)
             status = QLabel()
             btn = QPushButton()
             btn.setMinimumWidth(80)
             btn.clicked.connect(lambda _=False, s=s: app.toggle(s))
             login = QCheckBox("Start on login")
             login.clicked.connect(lambda checked, s=s: app.set_login(s, checked))
-            for c, w in enumerate((dot, name, status, btn, login)):
+            logs = QPushButton("Logs")
+            logs.setToolTip(f"Live log of {s['unit']}")
+            logs.clicked.connect(lambda _=False, s=s: app.show_logs([s]))
+            for c, w in enumerate((dot, name, status, btn, login, logs)):
                 grid.addWidget(w, r, c)
             self.rows[s["unit"]] = (dot, status, btn, login)
         grid.setColumnStretch(1, 1)
@@ -149,8 +290,12 @@ class Window(QWidget):
         start_all.clicked.connect(app.start_all)
         stop_all = QPushButton("Stop all")
         stop_all.clicked.connect(app.stop_all)
+        all_logs = QPushButton("All logs")
+        all_logs.setToolTip("Every service's log in one live view")
+        all_logs.clicked.connect(lambda: app.show_logs(app.services))
         bar.addWidget(start_all)
         bar.addWidget(stop_all)
+        bar.addWidget(all_logs)
         bar.addStretch(1)
         close = QPushButton("Close")
         close.clicked.connect(self.hide)
@@ -172,8 +317,7 @@ class Window(QWidget):
             if active in ("inactive", "failed") and s.get("when_off"):
                 notes.append(f"<b>{s['label']} is off:</b> {s['when_off']}")
             if active == "failed":
-                notes.append(f"<b>{s['label']} failed.</b> Press Start to try again. Log: "
-                             f"<code>journalctl --user -u {s['unit']}</code>")
+                notes.append(f"<b>{s['label']} failed.</b> Press Start to try again, or Logs to see why.")
         self.notes.setText("<br>".join(notes) or "All PRTS services are running.")
         self.adjustSize()
 
@@ -201,6 +345,13 @@ class Control:
         self.menu.addAction("Start all", self.start_all)
         self.menu.addAction("Stop all", self.stop_all)
         self.menu.addSeparator()
+        logs = self.menu.addMenu("Logs")
+        logs.addAction("All services", lambda: self.show_logs(self.services))
+        logs.addSeparator()
+        for s in self.services:
+            logs.addAction(s["label"], lambda s=s: self.show_logs([s]))
+        self.log_windows = {}
+        self.menu.addSeparator()
         self.menu.addAction("Open PRTS Control", self.show_window)
         self.menu.addAction("Quit (services keep running)", qapp.quit)
         self.tray.setContextMenu(self.menu)
@@ -220,6 +371,17 @@ class Control:
         self.window.show()
         self.window.raise_()
         self.window.activateWindow()
+
+    def show_logs(self, services):
+        units = tuple(s["unit"] for s in services)
+        w = self.log_windows.get(units)
+        if w is None:
+            title = "All services" if len(units) > 1 else services[0]["label"]
+            w = self.log_windows[units] = LogWindow(list(units), title)
+            w.setWindowIcon(self.tray.icon())
+        w.show()
+        w.raise_()
+        w.activateWindow()
 
     def refresh(self):
         self.states = {s["unit"]: state(s["unit"]) for s in self.services}

@@ -10,6 +10,10 @@ needs no `PRTS_MODULES` entry, and works whether or not other modules are enable
 - **Start / Stop** per service, **Start all / Stop all**, and a **Start on login** checkbox
   (`systemctl --user enable/disable`).
 - Explains what being off means for each service, and asks before stopping the Discord bot.
+- **Logs** per service and **All logs**: a live view of the service journal
+  (`journalctl --user -f`), with a level filter (everything, warnings, errors), a text
+  filter, Pause, Clear and Copy all. Errors show in red, warnings in yellow. Also in the tray
+  menu under Logs.
 - Tray icon color: green = all running, yellow = some running or changing, red = all off.
   Click it to open the window; right-click for a quick menu.
 - `prts_control.py --status` prints the states in a terminal and exits (no window).
@@ -76,7 +80,7 @@ There is no Windows version. Use `windows\start-bot.bat`, `windows\stop-bot.bat`
   one with `linux/install.sh` (without `--no-llama`) and set `LLAMA_MODEL`, `LLAMA_HOST` and
   `LLAMA_PORT` in `.env`; it then takes the package unit's place. Check with
   `systemctl --user cat llama-server`: the first line should be a path under `~/.config`.
-- **A service shows "Failed"**: press Start to try again, and read
-  `journalctl --user -u <unit>`.
+- **A service shows "Failed"**: press Start to try again, and press its **Logs** button
+  (or run `journalctl --user -u <unit>`) to see why.
 - **Start on login does nothing for the bot**: run `loginctl enable-linger "$USER"` if the
   services should also run while you are logged out.
