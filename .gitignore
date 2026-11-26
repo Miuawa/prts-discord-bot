@@ -31,6 +31,8 @@ data/sheets/*.txt
 data/stories.json
 /music/
 /roleplay-kit/
+# Optional PRTS Control icon (copyrighted game art: keep it local, never commit)
+modules/control/linux/prts-logo.png
 
 # Local machine settings
 .claude/settings.local.json

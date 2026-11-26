@@ -21,6 +21,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 USER_CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "prts-control" / "services.json"
+# Optional app icon: put any square PNG here (not shipped with the code; see README).
+LOGO = Path(os.environ["PRTS_CONTROL_ICON"]) if os.environ.get("PRTS_CONTROL_ICON") else HERE / "prts-logo.png"
 CONFIG = Path(os.environ["PRTS_CONTROL_CONFIG"]) if os.environ.get("PRTS_CONTROL_CONFIG") else (USER_CONFIG if USER_CONFIG.exists() else HERE / "services.json")
 
 DEFAULT_SERVICES = [
@@ -114,6 +116,42 @@ def dot_icon(color, size=64, ring=None):
     p.setBrush(QColor(color))
     m = size // 8 if ring else 2
     p.drawEllipse(m, m, size - 2 * m, size - 2 * m)
+    p.end()
+    return QIcon(pm)
+
+
+def logo_pixmap(size):
+    if not LOGO.is_file():
+        return None
+    pm = QPixmap(str(LOGO))
+    if pm.isNull():
+        return None
+    return pm.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+
+
+def app_icon():
+    """The logo if there is one, else a grey dot."""
+    pm = logo_pixmap(256)
+    return QIcon(pm) if pm else dot_icon(GREY)
+
+
+def status_icon(color, size=64):
+    """The logo with a status dot in its lower right corner, or just the dot without a logo."""
+    logo = logo_pixmap(size)
+    if logo is None:
+        return dot_icon(color, size)
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.drawPixmap((size - logo.width()) // 2, (size - logo.height()) // 2, logo)
+    d = size * 7 // 16
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor("#1b1f24"))
+    p.drawEllipse(size - d, size - d, d, d)
+    m = max(2, d // 7)
+    p.setBrush(QColor(color))
+    p.drawEllipse(size - d + m, size - d + m, d - 2 * m, d - 2 * m)
     p.end()
     return QIcon(pm)
 
@@ -256,7 +294,7 @@ class Window(QWidget):
         super().__init__()
         self.app = app
         self.setWindowTitle("PRTS Control")
-        self.setWindowIcon(app.tray.icon())
+        self.setWindowIcon(app_icon())
         outer = QVBoxLayout(self)
         grid = QGridLayout()
         grid.setHorizontalSpacing(14)
@@ -332,7 +370,8 @@ class Control:
         self.qapp = qapp
         self.services = load_services()
         self.states = {}
-        self.tray = QSystemTrayIcon(dot_icon(GREY))
+        self.tray_color = GREY
+        self.tray = QSystemTrayIcon(status_icon(GREY))
         self.tray.setToolTip("PRTS Control")
         self.menu = QMenu()
         self.actions = {}
@@ -378,7 +417,7 @@ class Control:
         if w is None:
             title = "All services" if len(units) > 1 else services[0]["label"]
             w = self.log_windows[units] = LogWindow(list(units), title)
-            w.setWindowIcon(self.tray.icon())
+            w.setWindowIcon(app_icon())
         w.show()
         w.raise_()
         w.activateWindow()
@@ -395,7 +434,9 @@ class Control:
             color = RED
         else:
             color = YELLOW
-        self.tray.setIcon(dot_icon(color))
+        if color != self.tray_color:
+            self.tray_color = color
+            self.tray.setIcon(status_icon(color))
         lines = []
         for s in self.services:
             a, _ = self.states[s["unit"]]
@@ -450,6 +491,7 @@ def main():
     qapp = QApplication(sys.argv)
     qapp.setApplicationName("PRTS Control")
     qapp.setDesktopFileName("prts-control")
+    qapp.setWindowIcon(app_icon())
     qapp.setQuitOnLastWindowClosed(False)
     lock = QLockFile(QDir.tempPath() + "/prts-control.lock")
     if not lock.tryLock(100):

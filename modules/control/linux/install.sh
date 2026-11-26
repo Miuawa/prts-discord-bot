@@ -22,6 +22,9 @@ case "${1:-}" in
   *) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
 esac
 chmod +x "$DIR/prts_control.py"
+# Optional logo next to the script (not shipped, see README); else a theme icon.
+ICON=preferences-system-services
+[ -f "$DIR/prts-logo.png" ] && ICON="$DIR/prts-logo.png"
 entry() {
 cat <<EOD
 [Desktop Entry]
@@ -30,7 +33,7 @@ Name=PRTS Control
 GenericName=PRTS service switch
 Comment=Turn the PRTS Discord bot, Claude narrator and local model on or off
 Exec=/usr/bin/env python3 "$DIR/prts_control.py" $1
-Icon=preferences-system-services
+Icon=$ICON
 Terminal=false
 Categories=Utility;System;
 StartupNotify=false

@@ -16,6 +16,10 @@ needs no `PRTS_MODULES` entry, and works whether or not other modules are enable
   menu under Logs.
 - Tray icon color: green = all running, yellow = some running or changing, red = all off.
   Click it to open the window; right-click for a quick menu.
+- Optional logo: put a square PNG at `modules/control/linux/prts-logo.png` (or point
+  `PRTS_CONTROL_ICON` at one) and it becomes the app, window and menu icon, with the status
+  color as a small dot in the tray icon's corner. Re-run `install.sh` so the app menu entry
+  picks it up. No logo ships with the code (it is gitignored); use art you have the right to use.
 - `prts_control.py --status` prints the states in a terminal and exits (no window).
 
 By default it controls the units from `linux/install.sh`: `llama-server.service` (local model),
