@@ -32,6 +32,7 @@ import {
   type GuildMember,
   type Message,
 } from 'discord.js'
+import { handleVoice, handleVoiceAutocomplete } from './voice.ts'
 import { spawn, type ChildProcess } from 'child_process'
 import { findLyrics, type LyricsQuery } from './lyrics.ts'
 import { readdirSync, statSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
@@ -61,6 +62,27 @@ export const MUSIC_COMMAND = {
   integration_types: [0],
   contexts: [0],
   options: [
+    {
+      type: 1,
+      name: 'voice',
+      description: "Play an operator's official voice line",
+      options: [
+        { type: 3, name: 'operator', description: 'Operator name', required: true, max_length: 100, autocomplete: true },
+        { type: 3, name: 'line', description: 'Which line (default: a random one)', required: false, max_length: 100, autocomplete: true },
+        {
+          type: 3,
+          name: 'language',
+          description: 'Voice language (default: Japanese)',
+          required: false,
+          choices: [
+            { name: 'Japanese', value: 'jp' },
+            { name: 'English', value: 'en' },
+            { name: 'Chinese', value: 'cn' },
+            { name: 'Korean', value: 'kr' },
+          ],
+        },
+      ],
+    },
     {
       type: 1,
       name: 'play',
@@ -890,6 +912,7 @@ async function settle(i: { editReply: (o: any) => Promise<unknown>; deleteReply:
 
 export async function handleMusic(i: ChatInputCommandInteraction): Promise<void> {
   const sub = i.options.getSubcommand()
+  if (sub === 'voice') return handleVoice(i)
   const guild = i.guild
   if (!guild) {
     await i.reply({ content: '[PRTS] Audio functions are only available inside a server. I apologize for the inconvenience.', flags: MessageFlags.Ephemeral })
@@ -1254,6 +1277,7 @@ async function control(guildId: string, action: string, member: GuildMember | nu
 // ---------- autocomplete ----------
 // /music play song: suggests files from the music folder (links and search words still work).
 export async function handleMusicAutocomplete(i: AutocompleteInteraction): Promise<void> {
+  if (i.options.getSubcommand(false) === 'voice') return handleVoiceAutocomplete(i)
   const focused = i.options.getFocused(true)
   if (focused.name !== 'song') {
     await i.respond([])

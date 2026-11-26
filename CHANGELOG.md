@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Fewer commands: `/coin` and `/choose` are now `/roll coin` and `/roll choose` (dice is `/roll dice`);
+  `/module` became the "Module pros and cons" button on `/operator`; `/links` is `/help command: links`;
+  `/voice` is `/music voice`.
+- `/story` autocompletes stories and events and shows who speaks in each chapter.
+- `/operator` for an NPC also shows their story appearances (lines and stories).
+- `/farm` understands tier names (Orirock Cube, Integrated Device) and says when a material is
+  best bought from event shops.
+- Optional daily story index refresh (`PRTS_STORY_REFRESH_CMD`), re-read without a restart.
+- Automatic posts: each server picks a channel with `/events announce` for new stories, and
+  events or headhunting banners when they start and a day before they end. The event list is
+  now `/events schedule`.
+
 ## 0.1.0 (unreleased)
 
 First public version.

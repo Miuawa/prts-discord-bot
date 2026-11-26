@@ -42,9 +42,8 @@ import {
 } from 'discord.js'
 import { randomBytes } from 'crypto'
 import { MUSIC_COMMAND, handleMusic, handleMusicButton, handleMusicSelect, handleMusicAutocomplete } from './music.ts'
-import { ARK_COMMANDS, ARK_COMMAND_NAMES, handleArk, handleArkAutocomplete, registerHelp } from './ark.ts'
-import { VOICE_COMMAND, handleVoice, handleVoiceAutocomplete } from './voice.ts'
-import { ARKPLUS_COMMANDS, ARKPLUS_NAMES, handleArkPlus, handleArkPlusAutocomplete, startReminders } from './arkplus.ts'
+import { ARK_COMMANDS, ARK_COMMAND_NAMES, handleArk, handleArkAutocomplete, handleArkButton, registerHelp, startStoryRefresh } from './ark.ts'
+import { ARKPLUS_COMMANDS, ARKPLUS_NAMES, handleArkPlus, handleArkPlusAutocomplete, startAnnouncements, startReminders } from './arkplus.ts'
 import { readAiConfig, aiAvailable, apiBackendFor, describeBackend, type AiConfig } from './ai/config.ts'
 import { handleApiTurn, recordUser, recordAssistant, type TurnHooks } from './ai/turns.ts'
 import { probe } from './ai/providers.ts'
@@ -959,7 +958,6 @@ const SLASH_COMMANDS = [
 SLASH_COMMANDS.push(...(ARK_COMMANDS as any[]))
 SLASH_COMMANDS.push(...ARKPLUS_COMMANDS)
 SLASH_COMMANDS.push(MUSIC_COMMAND as any)
-SLASH_COMMANDS.push(VOICE_COMMAND as any)
 for (const m of MODULES) SLASH_COMMANDS.push(...((m.commands ?? []) as any[]))
 SLASH_COMMANDS.push({
   name: 'Ask PRTS',
@@ -1101,10 +1099,6 @@ client.on('interactionCreate', async (interaction: Interaction) => {
       await handleMusicAutocomplete(interaction).catch(() => {})
       return
     }
-    if (interaction.commandName === 'voice') {
-      await handleVoiceAutocomplete(interaction).catch(() => {})
-      return
-    }
     if (ARKPLUS_NAMES.has(interaction.commandName)) {
       await handleArkPlusAutocomplete(interaction).catch(() => {})
       return
@@ -1114,15 +1108,6 @@ client.on('interactionCreate', async (interaction: Interaction) => {
         process.stderr.write(`discord: ark autocomplete failed: ${e}
 `),
       )
-    return
-  }
-  if (interaction.isChatInputCommand() && interaction.commandName === 'voice') {
-    if (await denyUnlisted(interaction)) return
-    await handleVoice(interaction).catch(async e => {
-      process.stderr.write(`discord: handleVoice failed: ${e}\n`)
-      const msg = { content: '[PRTS] Voice playback error. I apologize.', flags: MessageFlags.Ephemeral } as const
-      await (interaction.deferred || interaction.replied ? interaction.followUp(msg) : interaction.reply(msg)).catch(() => {})
-    })
     return
   }
   if (interaction.isChatInputCommand() && ARKPLUS_NAMES.has(interaction.commandName)) {
@@ -1187,6 +1172,11 @@ client.on('interactionCreate', async (interaction: Interaction) => {
     return
   }
   if (!interaction.isButton()) return
+  if (interaction.customId.startsWith('ark:')) {
+    if (await denyUnlisted(interaction)) return
+    await handleArkButton(interaction).catch(e => process.stderr.write(`discord: ark button failed: ${e}\n`))
+    return
+  }
   if (interaction.customId.startsWith('music:')) {
     if (await denyUnlisted(interaction)) return
     await handleMusicButton(interaction).catch(e =>
@@ -1466,6 +1456,8 @@ client.once('clientReady', c => {
   void registerSlashCommands(c.application?.id ?? c.user.id)
   for (const m of MODULES) void Promise.resolve(m.init?.(client)).catch(e => process.stderr.write(`prts bot: module ${m.name} init failed: ${e}\n`))
   startReminders(client)
+  startStoryRefresh(client)
+  startAnnouncements(client)
 })
 
 if (DRY_RUN) {

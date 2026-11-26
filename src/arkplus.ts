@@ -1,5 +1,5 @@
 // PRTS extra Arknights tools, answered by the bot itself (no AI):
-//   /events     current and upcoming events and headhunting banners
+//   /events     schedule of events and banners; announce picks the update channel
 //   /stage      a stage: cost, recommended level, drops
 //   /compare    two operators' maximum stats side by side
 //   /materials  what an operator needs for elite, skills, masteries and modules
@@ -7,12 +7,13 @@
 // Game data comes from the same GitHub mirror as ark.ts. It is large (the stage
 // and activity tables are 20 MB each), so it is trimmed once a day into
 // cache/arkplus.json.
-import { EmbedBuilder, MessageFlags, type AutocompleteInteraction, type ChatInputCommandInteraction, type Client } from 'discord.js'
+import { EmbedBuilder, MessageFlags, PermissionFlagsBits, type AutocompleteInteraction, type ChatInputCommandInteraction, type Client } from 'discord.js'
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs'
 import { join } from 'path'
 import { findOps, normName, registerHelp } from './ark.ts'
 
 import { CACHE_DIR } from './paths.ts'
+import { announce, announceChannelFor, setAnnounceChannel } from './announce.ts'
 const CACHE_FILE = join(CACHE_DIR, 'arkplus.json')
 const REMIND_FILE = join(CACHE_DIR, 'reminders.json')
 const GAMEDATA = 'https://raw.githubusercontent.com/ArknightsAssets/ArknightsGamedata/master/en/gamedata/excel/'
@@ -30,20 +31,36 @@ const PRIVATE_OPT = { type: 5, name: 'private', description: 'Only you can see t
 export const ARKPLUS_COMMANDS = [
   {
     name: 'events',
-    description: 'Current and upcoming events and headhunting banners',
+    description: 'Events and headhunting banners, and where PRTS posts updates',
     options: [
       {
-        type: 3,
-        name: 'show',
-        description: 'What to show (default: both)',
-        required: false,
-        choices: [
-          { name: 'Events and banners', value: 'all' },
-          { name: 'Events only', value: 'events' },
-          { name: 'Headhunting banners only', value: 'banners' },
+        type: 1,
+        name: 'schedule',
+        description: 'Current and upcoming events and headhunting banners',
+        options: [
+          {
+            type: 3,
+            name: 'show',
+            description: 'What to show (default: both)',
+            required: false,
+            choices: [
+              { name: 'Events and banners', value: 'all' },
+              { name: 'Events only', value: 'events' },
+              { name: 'Headhunting banners only', value: 'banners' },
+            ],
+          },
+          PRIVATE_OPT,
         ],
       },
-      PRIVATE_OPT,
+      {
+        type: 1,
+        name: 'announce',
+        description: 'Pick the channel for automatic updates: new stories, events and banners (Manage Server)',
+        options: [
+          { type: 7, name: 'channel', description: 'Channel to post in (leave empty to see the current setting)', required: false, channel_types: [0, 5] },
+          { type: 5, name: 'off', description: 'Stop automatic updates in this server', required: false },
+        ],
+      },
     ],
   },
   {
@@ -107,9 +124,10 @@ registerHelp([
     cmd: 'events',
     group: 'Arknights',
     short: 'Current and upcoming events and banners',
-    usage: '/events [show:<all|events|banners>]',
-    detail: 'Lists the events and headhunting banners that are running now or start soon, with countdowns. Dates come from the game data and are shown in your own time zone.',
-    examples: ['/events', '/events show: banners'],
+    usage: '/events schedule [show:<all|events|banners>] | announce [channel:<#channel>] [off:true]',
+    detail:
+      'schedule lists the events and headhunting banners that are running now or start soon, with countdowns. Dates come from the game data and are shown in your own time zone.\nannounce (needs Manage Server) picks the channel where PRTS posts automatic updates: new story chapters and events, and events or banners when they start and about a day before they end. Leave channel empty to see the current setting; off:true stops the updates.',
+    examples: ['/events schedule', '/events schedule show: banners', '/events announce channel: #news', '/events announce off: true'],
   },
   {
     cmd: 'stage',
@@ -136,13 +154,13 @@ registerHelp([
     examples: ['/materials operator: Exusiai goal: masteries', '/materials operator: Amiya'],
   },
   {
-    cmd: 'voice',
+    cmd: 'music voice',
     group: 'Audio',
     short: "Play an operator's voice line in voice chat",
-    usage: '/voice operator:<name> [line:<title>] [language:<jp|en|cn|kr>]',
+    usage: '/music voice operator:<name> [line:<title>] [language:<jp|en|cn|kr>]',
     detail:
       "Join a voice channel first. PRTS plays the operator's official in-game voice line (a random one unless you pick), and shows its text. Lines queue up if several are requested. If the music player is using the voice channel, please stop it first.",
-    examples: ['/voice operator: Texas', '/voice operator: Amiya line: Greeting language: en'],
+    examples: ['/music voice operator: Texas', '/music voice operator: Amiya line: Greeting language: en'],
   },
   {
     cmd: 'remind',
@@ -451,6 +469,31 @@ async function eventOperators(name: string): Promise<string[]> {
   }
   evOpsCache.set(name, { at: Date.now(), list: list.slice(0, 14) })
   return list.slice(0, 14)
+}
+
+async function cmdAnnounce(i: ChatInputCommandInteraction) {
+  if (!i.guildId) return i.reply({ content: '[PRTS] Automatic updates can only be set up inside a server.', flags: MessageFlags.Ephemeral })
+  const ch = i.options.getChannel('channel')
+  const off = i.options.getBoolean('off') ?? false
+  const current = announceChannelFor(i.guildId)
+  if (!ch && !off) {
+    const where = current ? `<#${current}>` : 'nowhere (off)'
+    return i.reply({ content: `[PRTS] Automatic updates in this server go to ${where}. Use \`/events announce channel:\` to change it.`, flags: MessageFlags.Ephemeral })
+  }
+  if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
+    return i.reply({ content: '[PRTS] Insufficient permissions. Choosing the update channel needs the Manage Server permission.', flags: MessageFlags.Ephemeral })
+  if (off) {
+    setAnnounceChannel(i.guildId, null)
+    return i.reply({ content: '[PRTS] Automatic updates are off for this server.', flags: MessageFlags.Ephemeral })
+  }
+  const target = await i.client.channels.fetch(ch!.id).catch(() => null)
+  const me = i.guild?.members.me
+  if (!target || !('send' in target) || (me && 'permissionsFor' in target && !target.permissionsFor(me)?.has([PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks])))
+    return i.reply({ content: `[PRTS] I cannot post in <#${ch!.id}>. Please give me Send Messages and Embed Links there, or pick another channel.`, flags: MessageFlags.Ephemeral })
+  setAnnounceChannel(i.guildId, ch!.id)
+  return i.reply({
+    content: `[PRTS] Confirmed. New stories, events and headhunting banners will be announced in <#${ch!.id}>. Real-time logging activated.`,
+  })
 }
 
 async function cmdEvents(i: ChatInputCommandInteraction, eph: boolean) {
@@ -887,12 +930,63 @@ export function startReminders(client: Client): void {
   void tick().catch(() => {})
 }
 
+// ───────────────────────── announcements ─────────────────────────
+// In the channels picked with /events announce (see announce.ts), posts when an event or headhunting banner starts and
+// again about a day before it ends. Posted ids are remembered in cache/announced.json, and
+// on the very first run everything already running counts as announced (no backlog spam).
+const ANNOUNCED_FILE = join(CACHE_DIR, 'announced.json')
+export function startAnnouncements(client: Client): void {
+  let seen: Record<string, number> | null = null
+  try {
+    seen = JSON.parse(readFileSync(ANNOUNCED_FILE, 'utf8'))
+  } catch {}
+  const tick = async () => {
+    ensurePlus()
+    if (!plus) return
+    const now = Math.floor(Date.now() / 1000)
+    const items = [
+      ...plus.events.map(e => ({ key: `ev:${e.id}`, name: e.name, kind: 'Event', start: e.start, end: e.end })),
+      ...plus.banners
+        .filter(b => BANNER_KIND[b.type] && b.type !== 'NORMAL' && b.end - b.open < 60 * 24 * 3600)
+        .map(b => ({ key: `hh:${b.id}`, name: b.name, kind: `${BANNER_KIND[b.type]} headhunting`, start: b.open, end: b.end })),
+    ]
+    const first = seen === null
+    seen ??= {}
+    const posts: string[] = []
+    for (const x of items) {
+      if (x.end <= now) continue
+      if (x.start <= now && !seen[`${x.key}:start`]) {
+        seen[`${x.key}:start`] = now
+        if (!first) posts.push(`🟢 **${clip(x.name, 80)}** (${x.kind}) has started · ends <t:${x.end}:R> (<t:${x.end}:f>)`)
+      }
+      if (x.end - now < 26 * 3600 && x.start <= now && !seen[`${x.key}:end`]) {
+        seen[`${x.key}:end`] = now
+        if (!first) posts.push(`⏳ **${clip(x.name, 80)}** (${x.kind}) ends <t:${x.end}:R> (<t:${x.end}:f>)`)
+      }
+    }
+    for (const k of Object.keys(seen)) if (now - seen[k] > 120 * 24 * 3600) delete seen[k]
+    mkdirSync(CACHE_DIR, { recursive: true })
+    writeFileSync(ANNOUNCED_FILE, JSON.stringify(seen))
+    if (!posts.length) return
+    await announce(
+      client,
+      new EmbedBuilder()
+        .setColor(0x23b7e5)
+        .setTitle('Operations bulletin')
+        .setDescription(clip(posts.join('\n'), 4000))
+        .setFooter({ text: 'PRTS · /events schedule for the full list' }),
+    )
+  }
+  setTimeout(() => void tick().catch(e => log(`announcements: ${e}`)), 90_000).unref()
+  setInterval(() => void tick().catch(e => log(`announcements: ${e}`)), 15 * 60_000).unref()
+}
+
 // ───────────────────────── dispatch ─────────────────────────
 export async function handleArkPlus(i: ChatInputCommandInteraction): Promise<void> {
   const eph = i.commandName === 'remind' ? true : (i.options.getBoolean('private') ?? false)
   switch (i.commandName) {
     case 'events':
-      await cmdEvents(i, eph)
+      await (i.options.getSubcommand() === 'announce' ? cmdAnnounce(i) : cmdEvents(i, eph))
       break
     case 'stage':
       await cmdStage(i, eph)

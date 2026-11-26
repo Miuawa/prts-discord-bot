@@ -13,11 +13,11 @@ yourself. Extra features, like the roleplay narrator, are optional
 
 ## Features
 
-- **Arknights tools, no AI needed**: `/operator`, `/skin`, `/tier`, `/module`, `/farm`,
+- **Arknights tools, no AI needed**: `/operator`, `/skin`, `/tier`, `/farm`,
   `/recruit`, `/base`, `/events`, `/stage`, `/compare`, `/materials`, `/myrtle`, `/wiki`,
-  `/story`, `/links`, `/help`.
-- **Utilities**: `/roll` (`2d6+3`, `4d6kh3`, `d%`), `/coin`, `/choose`, `/remind`, `/status`.
-- **Voice**: `/music` (local files, uploads, anything `yt-dlp` plays, lyrics) and `/voice`
+  `/story`, `/help`.
+- **Utilities**: `/roll` (dice like `2d6+3`, `4d6kh3`, `d%`; coin toss; pick an option), `/remind`, `/status`.
+- **Voice**: `/music` (local files, uploads, anything `yt-dlp` plays, lyrics) and `/music voice`
   (official operator voice lines).
 - **Talk to PRTS**: `/prts` and the "Ask PRTS" message command, with Discord pairing and
   allowlist access control.
@@ -284,7 +284,7 @@ loginctl enable-linger "$USER"          # optional: keep running while logged ou
   stops sending images.
 - **A module doesn't load**: the log says why (`prts modules: ...`). The folder must be
   `modules/<name>/index.ts` and the name must be in `PRTS_MODULES`.
-- **`/tier`, `/module`, `/farm`, `/base` are empty**: the sheet copies are created about 20 s
+- **`/tier`, `/farm`, `/base` and module ratings are empty**: the sheet copies are created about 20 s
   after start; check the log for Google errors.
 - **Slash commands don't show up**: Discord can take a while after the first registration;
   restart the Discord client.
@@ -340,10 +340,10 @@ repo: the bot fetches from them at runtime or links to them. Thank you to all of
 **Community guides** (fan-made Google Sheets)
 
 - [AK Tier List](https://docs.google.com/spreadsheets/d/1E7HmgKWiV8pKpJpvpVzziYxnaQTP01Vtw_PXEdL7XPA/edit) (`/tier`)
-- [DragonGJY's module ratings](https://docs.google.com/spreadsheets/d/1A0_0XTAcDDtHkvyAwjTqEEzM8cf5h3E60u23ZVXw4eg/edit) (`/module`)
+- [DragonGJY's module ratings](https://docs.google.com/spreadsheets/d/1A0_0XTAcDDtHkvyAwjTqEEzM8cf5h3E60u23ZVXw4eg/edit) (`/operator` module ratings)
 - [PeterYR's farming sheet](https://docs.google.com/spreadsheets/d/1RRiTIYVUNUf-xW8ljAJdYEOuSo23lpjHkPa0-zuC_4k/htmlview) (`/farm`)
 - [RIIC base skill guide](https://docs.google.com/spreadsheets/d/1zYc2JU46X0XWmV7s1503bN4feRdOMa1eehrTQ2jGaiE/edit) (`/base`)
-- Linked from `/links`: [Penguin Statistics](https://penguin-stats.io),
+- Linked from `/help command: links`: [Penguin Statistics](https://penguin-stats.io),
   [Arknights Toolbox](https://arkntools.app) and
   [TacticalBreakfast's mastery guides](https://docs.google.com/spreadsheets/d/1iJF12O6QOba1dlUVmobwvc1eBZE7FRB6-tKxmZEcG1I/).
 

@@ -25,30 +25,6 @@ const DUB_NAME: Record<string, string> = { jp: 'Japanese', cn: 'Chinese', en: 'E
 const IDLE_LEAVE_MS = 20_000
 const MAX_QUEUE = 10
 
-export const VOICE_COMMAND = {
-  name: 'voice',
-  description: "Play an operator's official voice line in your voice channel",
-  type: 1,
-  integration_types: [0],
-  contexts: [0],
-  options: [
-    { type: 3, name: 'operator', description: 'Operator name', required: true, max_length: 100, autocomplete: true },
-    { type: 3, name: 'line', description: 'Which line (default: a random one)', required: false, max_length: 100, autocomplete: true },
-    {
-      type: 3,
-      name: 'language',
-      description: 'Voice language (default: Japanese)',
-      required: false,
-      choices: [
-        { name: 'Japanese', value: 'jp' },
-        { name: 'English', value: 'en' },
-        { name: 'Chinese', value: 'cn' },
-        { name: 'Korean', value: 'kr' },
-      ],
-    },
-  ],
-}
-
 // ---------- line data ----------
 type Line = { title: string; text: string; id: string; dubs: string[] }
 let lines: { at: number; byChar: Map<string, Line[]> } | null = null

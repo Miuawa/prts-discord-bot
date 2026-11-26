@@ -12,16 +12,28 @@
 //   <PRTS_DATA_DIR>/sheets/*.txt (created on first run), which are re-read
 //   whenever they change.
 // - Story index (optional): <PRTS_DATA_DIR>/stories.json or PRTS_STORIES_JSON.
-//   Without it, /story only links to the story reader.
+//   Without it, /story only links to the story reader. PRTS_STORY_REFRESH_CMD
+//   can rebuild it daily (see startStoryRefresh); the file is re-read on change.
 // - arknights.wiki.gg MediaWiki API for /wiki and NPC fallbacks.
 // - Images: myrtle.moe CDN (operator art), yuanyan3060 GitHub mirror (avatars).
-import { EmbedBuilder, MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle, type ChatInputCommandInteraction, type AutocompleteInteraction } from 'discord.js'
+import {
+  EmbedBuilder,
+  MessageFlags,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  type ChatInputCommandInteraction,
+  type AutocompleteInteraction,
+  type ButtonInteraction,
+  type Client,
+} from 'discord.js'
 import { readFileSync, writeFileSync, mkdirSync, statSync, existsSync, renameSync, utimesSync } from 'fs'
 import { join } from 'path'
 
 const SHEETS = join(DATA_DIR, 'sheets')
 const STORIES_JSON = process.env.PRTS_STORIES_JSON ?? join(DATA_DIR, 'stories.json')
 import { CACHE_DIR, DATA_DIR } from './paths.ts'
+import { announce } from './announce.ts'
 const CACHE_FILE = join(CACHE_DIR, 'arkdata.json')
 const CACHE_MAX_AGE_MS = 3 * 24 * 3600 * 1000
 const GAMEDATA = 'https://raw.githubusercontent.com/ArknightsAssets/ArknightsGamedata/master/en/gamedata/excel/'
@@ -43,35 +55,44 @@ const PRIVATE_OPT = { type: 5, name: 'private', description: 'Only you can see t
 export const ARK_COMMANDS = [
   {
     name: 'roll',
-    description: 'Roll dice, e.g. 1d20, 2d6+3, 4d6kh3, d%',
+    description: 'Random tools: dice, coin toss, or let PRTS choose',
     options: [
-      { type: 3, name: 'dice', description: 'Dice expression (default 1d20)', required: false, max_length: 100 },
-      { type: 3, name: 'reason', description: 'What the roll is for', required: false, max_length: 100 },
-      PRIVATE_OPT,
-    ],
-  },
-  {
-    name: 'coin',
-    description: 'Toss a coin (or several)',
-    options: [
-      { type: 4, name: 'count', description: 'How many coins (default 1, max 100)', required: false, min_value: 1, max_value: 100 },
       {
-        type: 3,
-        name: 'call',
-        description: 'Call it before the toss',
-        required: false,
-        choices: [
-          { name: 'Heads', value: 'heads' },
-          { name: 'Tails', value: 'tails' },
+        type: 1,
+        name: 'dice',
+        description: 'Roll dice, e.g. 1d20, 2d6+3, 4d6kh3, d%',
+        options: [
+          { type: 3, name: 'dice', description: 'Dice expression (default 1d20)', required: false, max_length: 100 },
+          { type: 3, name: 'reason', description: 'What the roll is for', required: false, max_length: 100 },
+          PRIVATE_OPT,
         ],
       },
-      PRIVATE_OPT,
+      {
+        type: 1,
+        name: 'coin',
+        description: 'Toss a coin (or several)',
+        options: [
+          { type: 4, name: 'count', description: 'How many coins (default 1, max 100)', required: false, min_value: 1, max_value: 100 },
+          {
+            type: 3,
+            name: 'call',
+            description: 'Call it before the toss',
+            required: false,
+            choices: [
+              { name: 'Heads', value: 'heads' },
+              { name: 'Tails', value: 'tails' },
+            ],
+          },
+          PRIVATE_OPT,
+        ],
+      },
+      {
+        type: 1,
+        name: 'choose',
+        description: 'PRTS picks one option for you',
+        options: [{ type: 3, name: 'options', description: 'Options separated by | or commas', required: true, max_length: 500 }, PRIVATE_OPT],
+      },
     ],
-  },
-  {
-    name: 'choose',
-    description: 'PRTS picks one option for you',
-    options: [{ type: 3, name: 'options', description: 'Options separated by | or commas', required: true, max_length: 500 }, PRIVATE_OPT],
   },
   {
     name: 'operator',
@@ -101,11 +122,6 @@ export const ARK_COMMANDS = [
     ],
   },
   {
-    name: 'module',
-    description: 'Module ratings (DragonGJY, fan-made, based on CN)',
-    options: [{ type: 3, name: 'operator', description: 'Operator name', required: true, autocomplete: true, max_length: 60 }, PRIVATE_OPT],
-  },
-  {
     name: 'farm',
     description: 'Best stages to farm a material (PeterYR sheet)',
     options: [{ type: 3, name: 'material', description: 'Material, e.g. Orirock, Device, RMA', required: true, autocomplete: true, max_length: 60 }, PRIVATE_OPT],
@@ -119,7 +135,7 @@ export const ARK_COMMANDS = [
   {
     name: 'story',
     description: "Find a story chapter or event and link it in Timo's reader",
-    options: [{ type: 3, name: 'query', description: 'Stage code (15-12), title, event name or operator', required: true, max_length: 100 }, PRIVATE_OPT],
+    options: [{ type: 3, name: 'query', description: 'Stage code (15-12), title, event name or operator', required: true, autocomplete: true, max_length: 100 }, PRIVATE_OPT],
   },
   {
     name: 'base',
@@ -305,7 +321,6 @@ export const ARK_COMMANDS = [
       { type: 1, name: 'unlink', description: 'Remove the link to your Myrtle profile', options: [] },
     ],
   },
-  { name: 'links', description: 'Useful Arknights sites and tools', options: [PRIVATE_OPT] },
   {
     name: 'help',
     description: 'All commands, what they do and how to use them',
@@ -807,7 +822,8 @@ function loadSheets(): Sheets | null {
         if (f.length >= 2 && /^[A-Z0-9]/.test(f[0]) && !isNaN(eff) && f[0] !== 'Stage') rows.push([f[0], eff, isNaN(drop) ? NaN : drop])
       }
       const label = FARM_ALIAS[key] ? `${FARM_ALIAS[key]} (${key})` : key
-      if (rows.length) s.farm.set(key, { label, rows })
+      const shopOnly = lines.some(l => /BUY FROM EVENT SHOPS/i.test(l))
+      if (rows.length || shopOnly) s.farm.set(key, { label, rows })
     }
   } catch (e) {
     log(`farm sheet: ${e}`)
@@ -993,6 +1009,13 @@ async function cmdOperator(i: ChatInputCommandInteraction, eph: boolean) {
     await i.deferReply({ flags: ephFlag(eph) })
     const w = await wikiLookup(q).catch(() => null)
     if (!w) return i.editReply({ content: `[PRTS] No operator or wiki record matches "${clip(q, 60)}". Please check the spelling.` })
+    const who = w.data.title ?? q
+    const app = storyAppearances(who) ?? storyAppearances(q)
+    if (app)
+      w.addFields({
+        name: 'Story appearances',
+        value: clip(`Speaks **${app.lines}** lines in **${app.stories}** stories: ${app.groups.join(', ')}. Search them with \`/story\`.`, 1024),
+      })
     return i.editReply({ embeds: [w.setAuthor({ name: 'No operator file found · Wiki record' })] })
   }
   const sh = loadSheets()
@@ -1019,7 +1042,10 @@ async function cmdOperator(i: ChatInputCommandInteraction, eph: boolean) {
   }
   e.addFields({ name: 'Links', value: opLinks(o) })
   e.setFooter({ text: `${FOOTER} · Tier/module ratings are fan-made community sheets` })
-  return i.reply({ embeds: [e], flags: ephFlag(eph) })
+  const components = rated.length
+    ? [new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(`ark:mod:${o.id}`).setStyle(ButtonStyle.Secondary).setLabel('Module pros and cons'))]
+    : []
+  return i.reply({ embeds: [e], components, flags: ephFlag(eph) })
 }
 
 // ───────────────────────── /tier ─────────────────────────
@@ -1069,16 +1095,13 @@ async function cmdTier(i: ChatInputCommandInteraction, eph: boolean) {
 
 // ───────────────────────── /module ─────────────────────────
 
-async function cmdModule(i: ChatInputCommandInteraction, eph: boolean) {
+function moduleEmbed(o: Op): EmbedBuilder {
   const sh = loadSheets()
-  ensureData()
-  const q = i.options.getString('operator', true)
-  const o = findOps(q, 1)[0]
-  const name = o?.name ?? q
+  const name = o.name
   const rows = sh?.modules.get(normName(name)) ?? []
   const e = embed(`Module ratings: ${name}`).setFooter({ text: `DragonGJY module ratings (fan-made, based on CN) · checked ${sheetDate('module-ratings-dragongjy.txt')}` })
   if (!rows.length) {
-    const mods = o?.modules.map(m => `**${m.type}** ${m.name}`).join('\n')
+    const mods = o.modules.map(m => `**${m.type}** ${m.name}`).join('\n')
     e.setDescription(`No rating found in the module sheet.${mods ? `\n\nModules in game data:\n${mods}` : ''}`).setColor(COLOR.dim)
   } else {
     e.setDescription('MR = module rating, IC = investment cost-efficiency, Rec. LV = recommended module level.')
@@ -1090,8 +1113,19 @@ async function cmdModule(i: ChatInputCommandInteraction, eph: boolean) {
       })
     }
   }
-  if (o) e.addFields({ name: 'Links', value: opLinks(o) })
-  return i.reply({ embeds: [e], flags: ephFlag(eph) })
+  return e
+}
+
+/** Buttons on bot embeds: `ark:mod:<operator id>` shows the module ratings privately. */
+export async function handleArkButton(i: ButtonInteraction): Promise<void> {
+  const m = /^ark:mod:(.+)$/.exec(i.customId)
+  ensureData()
+  const o = m && opIndex()?.byId.get(m[1])
+  if (!o) {
+    await i.reply({ content: '[PRTS] That record is no longer available. I apologize.', flags: MessageFlags.Ephemeral })
+    return
+  }
+  await i.reply({ embeds: [moduleEmbed(o)], flags: MessageFlags.Ephemeral })
 }
 
 // ───────────────────────── /farm ─────────────────────────
@@ -1106,6 +1140,10 @@ function findMaterial(q: string, sh: Sheets) {
         .some(w => w.startsWith(n))
     )
       return { key, ...v }
+  // Tier names ("Orirock Cube", "Integrated Device", "Sugar Pack") share their family's tab.
+  const words = n.split(' ').filter(w => w.length >= 3)
+  const names = (key: string) => [key, ...(FARM_ALIAS[key] ?? '').split(' ')].map(normName).filter(Boolean)
+  if (words.length > 1) for (const w of words) for (const [key, v] of sh.farm) if (names(key).includes(w)) return { key, ...v }
   return null
 }
 
@@ -1114,6 +1152,14 @@ async function cmdFarm(i: ChatInputCommandInteraction, eph: boolean) {
   const q = i.options.getString('material', true)
   const m = sh && findMaterial(q, sh)
   if (!m) return i.reply({ content: `[PRTS] No farming record for "${clip(q, 60)}". Try names like Orirock, Device, RMA, Gel or Alloy.`, flags: MessageFlags.Ephemeral })
+  if (!m.rows.length) {
+    const e = embed(`Farming: ${m.label}`)
+      .setDescription(
+        `No stage is worth farming for this material. The sheet's advice: **buy it from event shops instead**.\n[Open the full sheet](https://docs.google.com/spreadsheets/d/1RRiTIYVUNUf-xW8ljAJdYEOuSo23lpjHkPa0-zuC_4k/htmlview)`,
+      )
+      .setFooter({ text: `PeterYR farming sheet (fan-made, Penguin Statistics data) · checked ${sheetDate('peteryr-farming.txt')}` })
+    return i.reply({ embeds: [e], flags: ephFlag(eph) })
+  }
   const lines = m.rows
     .slice(0, 10)
     .map(([st, eff, drop], idx) => `\`${String(idx + 1).padStart(2)}\` **${st}** · efficiency ${(eff * 100).toFixed(1)}%${isNaN(drop) ? '' : ` · main drop ${(drop * 100).toFixed(1)}%`}`)
@@ -1226,18 +1272,95 @@ async function cmdWiki(i: ChatInputCommandInteraction, eph: boolean) {
 
 // ───────────────────────── /story ─────────────────────────
 
-type Story = { group: string; group_name: string; kind: string; code: string; name: string; tag: string; file: string; synopsis: string; operator: string }
+type Story = { group: string; group_name: string; kind: string; code: string; name: string; tag: string; file: string; synopsis: string; operator: string; speakers?: Record<string, number> }
 let stories: Story[] | null = null
+let storiesPath = STORIES_JSON
+let storiesMtime = 0
 function loadStories(): Story[] {
-  if (!stories) {
+  let mtime = 0
+  try {
+    mtime = statSync(storiesPath).mtimeMs
+  } catch {}
+  if (!stories || mtime !== storiesMtime) {
+    storiesMtime = mtime
     try {
-      stories = JSON.parse(readFileSync(STORIES_JSON, 'utf8'))
+      stories = JSON.parse(readFileSync(storiesPath, 'utf8'))
     } catch (e) {
       log(`stories: ${e}`)
-      stories = []
+      stories ??= []
     }
   }
   return stories!
+}
+
+/** Lines and stories where a character speaks, from the story index (exact speaker name). */
+function storyAppearances(name: string): { lines: number; stories: number; groups: string[] } | null {
+  const n = name.trim().toLowerCase()
+  let lines = 0,
+    count = 0
+  const groups: string[] = []
+  for (const s of loadStories()) {
+    const hit = Object.entries(s.speakers ?? {}).find(([who]) => who.toLowerCase() === n)
+    if (!hit) continue
+    lines += hit[1]
+    count++
+    if (!groups.includes(s.group_name)) groups.push(s.group_name)
+  }
+  return count ? { lines, stories: count, groups } : null
+}
+
+// Optional daily story index refresh (PRTS_STORY_REFRESH_CMD). The command
+// rebuilds the index outside git and prints one JSON line:
+//   {"changed", "stories_json", "new_groups": [{id, name, kind, stories}], "grown_groups": [...]}
+// New stories are announced in the channels picked with /events announce.
+const REFRESH_CMD = process.env.PRTS_STORY_REFRESH_CMD?.trim()
+type RefreshGroup = { id: string; name: string; kind: string; stories: number }
+export async function runStoryRefresh(client: Client): Promise<void> {
+  const proc = Bun.spawn(['sh', '-c', REFRESH_CMD!], { stdout: 'pipe', stderr: 'pipe' })
+  const timer = setTimeout(() => proc.kill(), 15 * 60_000)
+  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
+  clearTimeout(timer)
+  if (code !== 0) {
+    log(`story refresh failed (${code}): ${clip(err.trim(), 300)}`)
+    return
+  }
+  const res = JSON.parse(out.trim().split('\n').pop() || '{}') as { changed?: boolean; stories_json?: string; new_groups?: RefreshGroup[]; grown_groups?: RefreshGroup[] }
+  if (res.stories_json && existsSync(res.stories_json)) storiesPath = res.stories_json
+  const added = res.new_groups ?? []
+  const grown = res.grown_groups ?? []
+  if (res.changed) log(`story index refreshed: ${added.length} new groups, ${grown.length} with new chapters`)
+  if (!(added.length || grown.length)) return
+  ensureData()
+  const line = (g: RefreshGroup) => {
+    const slug = data?.timoGroups[g.id]
+    const name = slug ? `[${g.name}](${TIMO}/${g.id.startsWith('main_') ? 'main' : 'side'}/${slug})` : g.name
+    return `• ${name}${g.kind === 'record' ? ' (operator record)' : ''} · ${g.stories} ${g.stories === 1 ? 'story' : 'stories'}`
+  }
+  const big = [...added, ...grown].filter(g => g.kind !== 'record')
+  const records = added.filter(g => g.kind === 'record')
+  const parts = []
+  if (big.length) parts.push(big.map(line).join('\n'))
+  if (records.length) parts.push(`Operator records: ${records.map(g => g.name).join(', ')}`)
+  const e = embed('New story records available')
+    .setURL(TIMO)
+    .setDescription(clip(`${parts.join('\n\n')}\n\nSearch them with \`/story\`.`, 4000))
+    .setFooter({ text: `${FOOTER} · Story index: arknights.timo.beer` })
+  await announce(client, e)
+}
+export function startStoryRefresh(client: Client): void {
+  if (!REFRESH_CMD) return
+  let running = false
+  const tick = () => {
+    if (running) return
+    running = true
+    void runStoryRefresh(client)
+      .catch(e => log(`story refresh: ${e}`))
+      .finally(() => {
+        running = false
+      })
+  }
+  setTimeout(tick, 60_000).unref()
+  setInterval(tick, 24 * 3600 * 1000).unref()
 }
 
 function storyLink(s: Story): string | null {
@@ -1271,7 +1394,15 @@ async function cmdStory(i: ChatInputCommandInteraction, eph: boolean) {
     seen.add(key)
     const link = storyLink(s)
     const title = clip(`${s.code ? s.code + ' ' : ''}${s.name}${s.tag ? ` (${s.tag})` : ''} · ${s.group_name}`, 250)
-    e.addFields({ name: title, value: clip(`${s.synopsis ? clip(s.synopsis, 220) + '\n' : ''}${link ? `[Read in Timo's reader](${link})` : ''}` || '—', 1024) })
+    const cast = Object.entries(s.speakers ?? {})
+      .filter(([who]) => who !== '???' && !/^(\?+|narration)$/i.test(who))
+      .slice(0, 6)
+      .map(([who, n]) => `${who} (${n})`)
+      .join(', ')
+    e.addFields({
+      name: title,
+      value: clip(`${s.synopsis ? clip(s.synopsis, 220) + '\n' : ''}${cast ? `*Speaking:* ${clip(cast, 200)}\n` : ''}${link ? `[Read in Timo's reader](${link})` : ''}` || '—', 1024),
+    })
     if (++shown >= 8) break
   }
   if (hits.length > shown) e.setDescription(`Showing ${shown} of ${hits.length} matches. Narrow the query for more precise results.`)
@@ -2009,8 +2140,8 @@ async function cmdSkin(i: ChatInputCommandInteraction, eph: boolean) {
 
 // ───────────────────────── /links /help ─────────────────────────
 
-async function cmdLinks(i: ChatInputCommandInteraction, eph: boolean) {
-  const e = embed('Arknights resources').setDescription(
+function linksEmbed(): EmbedBuilder {
+  return embed('Arknights resources').setDescription(
     [
       '**Lore and story**',
       `• [Arknights Wiki](${WIKI}): operators, characters, events, lore`,
@@ -2023,13 +2154,12 @@ async function cmdLinks(i: ChatInputCommandInteraction, eph: boolean) {
       '',
       '**Community sheets** (fan-made)',
       '• [AK Tier List](https://docs.google.com/spreadsheets/d/1E7HmgKWiV8pKpJpvpVzziYxnaQTP01Vtw_PXEdL7XPA/edit) · `/tier`',
-      '• [DragonGJY module ratings](https://docs.google.com/spreadsheets/d/1A0_0XTAcDDtHkvyAwjTqEEzM8cf5h3E60u23ZVXw4eg/edit) · `/module`',
+      '• [DragonGJY module ratings](https://docs.google.com/spreadsheets/d/1A0_0XTAcDDtHkvyAwjTqEEzM8cf5h3E60u23ZVXw4eg/edit) · `/operator`',
       '• [PeterYR farming](https://docs.google.com/spreadsheets/d/1RRiTIYVUNUf-xW8ljAJdYEOuSo23lpjHkPa0-zuC_4k/htmlview) · `/farm`',
       `• [RIIC base skill guide](${RIIC_URL}) · \`/base\``,
       '• [TacticalBreakfast mastery guides](https://docs.google.com/spreadsheets/d/1iJF12O6QOba1dlUVmobwvc1eBZE7FRB6-tKxmZEcG1I/)',
     ].join('\n'),
   )
-  return i.reply({ embeds: [e], flags: ephFlag(eph) })
 }
 
 export type HelpEntry = { cmd: string; group: string; short: string; usage: string; detail: string; examples: string[] }
@@ -2049,7 +2179,7 @@ const HELP: HelpEntry[] = [
     short: 'Operator card: class, faction, tier, modules, art, links',
     usage: '/operator name:<operator>',
     detail:
-      'Shows rarity, class and branch, faction, position, tags, tier (AK Tier List), modules with DragonGJY ratings, whether they can be recruited, E2 art, and links to the wiki, Myrtle, story records and voice lines. Names autocomplete as you type. For non-operators (NPCs) it shows a wiki summary.',
+      'Shows rarity, class and branch, faction, position, tags, tier (AK Tier List), modules with DragonGJY ratings, whether they can be recruited, E2 art, and links to the wiki, Myrtle, story records and voice lines. The "Module pros and cons" button shows the full DragonGJY notes (recommended level, priority, pros and cons) privately. Names autocomplete as you type. For non-operators (NPCs) it shows a wiki summary and their story appearances.',
     examples: ['/operator name: Texas', '/operator name: Wang'],
   },
   {
@@ -2061,15 +2191,7 @@ const HELP: HelpEntry[] = [
       'With no options it lists the top tiers (EX to A). Pick a tier, a class, or both to filter, or give one operator to see their rating. Fan-made list for the global server, assuming full investment. Updated live from the Google Sheet.',
     examples: ['/tier', '/tier tier: S+', '/tier class: Medic', '/tier operator: Texas the Omertosa'],
   },
-  {
-    cmd: 'module',
-    group: 'Arknights records',
-    short: 'Module ratings with pros and cons',
-    usage: '/module operator:<operator>',
-    detail:
-      'Shows each module of the operator with DragonGJY ratings: MR (module rating), IC (investment cost-efficiency), recommended level, priority, a quick summary, and pros and cons. Based on the CN server, which is ahead of global.',
-    examples: ["/module operator: Ch'en", '/module operator: Bagpipe'],
-  },
+
   {
     cmd: 'farm',
     group: 'Arknights records',
@@ -2154,36 +2276,22 @@ const HELP: HelpEntry[] = [
   {
     cmd: 'links',
     group: 'Arknights records',
-    short: 'Useful Arknights sites and community sheets',
-    usage: '/links',
+    short: 'Useful Arknights sites and the community sheets PRTS uses',
+    usage: '/help command: links',
     detail: 'Wiki, story reader, Myrtle, Penguin Statistics, planners, and the community sheets PRTS uses.',
-    examples: ['/links'],
+    examples: ['/help command: links'],
   },
+
   {
     cmd: 'roll',
     group: 'Utilities',
-    short: 'Roll dice',
-    usage: '/roll [dice:<expression>] [reason:<text>]',
+    short: 'Dice, coin toss, or let PRTS choose',
+    usage: '/roll dice [dice:<expression>] [reason:<text>] | coin [count:<1-100>] [call:<heads|tails>] | choose options:<a | b | c>',
     detail:
-      'Default 1d20. Supports several dice and modifiers (2d6+3, 1d20+1d4-1), keep highest/lowest (4d6kh3, 2d20kl1), and percentile (d%). Max 100 dice. Kept maximum rolls are bold, dropped dice are struck through.',
-    examples: ['/roll', '/roll dice: 2d6+3', '/roll dice: 4d6kh3 reason: Strength', '/roll dice: d%'],
+      'dice: default 1d20. Supports several dice and modifiers (2d6+3, 1d20+1d4-1), keep highest/lowest (4d6kh3, 2d20kl1), and percentile (d%). Max 100 dice. Kept maximum rolls are bold, dropped dice are struck through.\ncoin: one coin, or up to 100 with a heads/tails tally. Call it beforehand if you like.\nchoose: separate options with | or commas; PRTS picks one at random, without hesitation.',
+    examples: ['/roll dice', '/roll dice dice: 4d6kh3 reason: Strength', '/roll coin count: 10', '/roll choose options: tea | coffee | juice'],
   },
-  {
-    cmd: 'coin',
-    group: 'Utilities',
-    short: 'Toss a coin (or several)',
-    usage: '/coin [count:<1-100>] [call:<heads|tails>]',
-    detail: 'Tosses one coin, or up to 100 with a heads/tails tally. Call it beforehand if you like.',
-    examples: ['/coin', '/coin call: Heads', '/coin count: 10'],
-  },
-  {
-    cmd: 'choose',
-    group: 'Utilities',
-    short: 'PRTS picks one option for you',
-    usage: '/choose options:<a | b | c>',
-    detail: 'Separate options with | or commas. PRTS picks one at random, without hesitation.',
-    examples: ['/choose options: tea | coffee | juice', '/choose options: farm 1-7, farm 4-6'],
-  },
+
   {
     cmd: 'music',
     group: 'Audio',
@@ -2227,6 +2335,7 @@ export function registerHelp(entries: HelpEntry[]): void {
 async function cmdHelp(i: ChatInputCommandInteraction, eph: boolean) {
   const which = i.options.getString('command')
   if (which) {
+    if (which === 'links') return i.reply({ embeds: [linksEmbed()], flags: ephFlag(eph) })
     const h = HELP.find(x => x.cmd === which)
     if (h) {
       const e = embed(`/${h.cmd}`)
@@ -2250,7 +2359,7 @@ async function cmdHelp(i: ChatInputCommandInteraction, eph: boolean) {
       first = false
     }
     for (const h of HELP.filter(x => x.group === g)) {
-      const line = `**/${h.cmd}** · ${h.short}\n\`${clip(h.usage, 90)}\``
+      const line = h.cmd === 'links' ? `**Useful sites** · ${h.short}\n\`${h.usage}\`` : `**/${h.cmd}** · ${h.short}\n\`${clip(h.usage, 90)}\``
       if ([...chunk, line].join('\n').length > 1000) flush()
       chunk.push(line)
     }
@@ -2265,23 +2374,16 @@ async function cmdHelp(i: ChatInputCommandInteraction, eph: boolean) {
 export async function handleArk(i: ChatInputCommandInteraction): Promise<void> {
   const eph = i.options.getBoolean('private') ?? false
   switch (i.commandName) {
-    case 'roll':
-      await cmdRoll(i, eph)
+    case 'roll': {
+      const sub = i.options.getSubcommand()
+      await (sub === 'coin' ? cmdCoin(i, eph) : sub === 'choose' ? cmdChoose(i, eph) : cmdRoll(i, eph))
       break
-    case 'coin':
-      await cmdCoin(i, eph)
-      break
-    case 'choose':
-      await cmdChoose(i, eph)
-      break
+    }
     case 'operator':
       await cmdOperator(i, eph)
       break
     case 'tier':
       await cmdTier(i, eph)
-      break
-    case 'module':
-      await cmdModule(i, eph)
       break
     case 'farm':
       await cmdFarm(i, eph)
@@ -2303,9 +2405,6 @@ export async function handleArk(i: ChatInputCommandInteraction): Promise<void> {
       break
     case 'myrtle':
       await cmdMyrtle(i, eph)
-      break
-    case 'links':
-      await cmdLinks(i, eph)
       break
     case 'help':
       await cmdHelp(i, eph)
@@ -2357,12 +2456,21 @@ export async function handleArkAutocomplete(i: AutocompleteInteraction): Promise
   const q = String(f.value ?? '')
   let choices: Choice[] = []
   ensureData()
-  if (f.name === 'name' || f.name === 'operator') {
-    let ops = findOps(q)
-    if (i.commandName === 'module') {
-      const sh = loadSheets()
-      if (sh) ops = ops.filter(o => sh.modules.has(normName(o.name))).concat(ops.filter(o => !sh.modules.has(normName(o.name))))
+  if (i.commandName === 'story' && f.name === 'query') {
+    const n = q.trim().toLowerCase()
+    const seen = new Set<string>()
+    for (const s of loadStories().slice().reverse()) {
+      const group = s.kind === 'record' ? '' : s.group_name
+      const cands = [group, s.code ? `${s.code} ${s.name}` : s.kind === 'record' ? '' : s.name]
+      for (const c of cands) {
+        if (!c || seen.has(c) || (n && !c.toLowerCase().includes(n))) continue
+        seen.add(c)
+        choices.push({ name: clip(c === group ? `${c} (whole story)` : `${c} · ${s.group_name}`, 100), value: clip(c === group ? c : s.code || s.name, 100) })
+      }
+      if (choices.length >= 25) break
     }
+  } else if (f.name === 'name' || f.name === 'operator') {
+    const ops = findOps(q)
     choices = ops.slice(0, 25).map(o => ({ name: `${o.name} · ${o.rarity}★ ${o.cls}`, value: o.name }))
   } else if (f.name === 'team') {
     const sh = loadSheets()
