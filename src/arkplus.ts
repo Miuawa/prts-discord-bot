@@ -865,12 +865,17 @@ export function enemyCharacter(title: string, wikitext: string): { page: string;
   return { page: link[1].trim(), hint: (link[2] ?? '').trim() }
 }
 
-/** The enemy's own wiki page (found by its game id), the character it shows, and that character's portrait.
- * Operator pages keep the NPC art on "<page>/Story". */
+/** The enemy's own wiki page (found by its game id), the character it shows, and their portrait:
+ * from the story tab first, then from the character the page links to. Operator pages keep the NPC art on "<page>/Story". */
 async function enemyWiki(e: Enemy): Promise<EnemyWiki> {
   const hit = enemyWikiCache.get(e.id)
   if (hit && Date.now() - hit.at < 12 * 3600_000) return hit.value
   const value: EnemyWiki = {}
+  const fileUrl = async (file: string) => {
+    const info = await wikiApi({ action: 'query', titles: `File:${file}`, prop: 'imageinfo', iiprop: 'url' })
+    return Object.values<any>(info?.query?.pages ?? {})[0]?.imageinfo?.[0]?.url as string | undefined
+  }
+  const plain = e.name.replace(/^'|'$/g, '')
   try {
     const found = await wikiApi({ action: 'query', list: 'search', srsearch: `insource:"${e.id}"`, srlimit: '5', srnamespace: '0' })
     for (const r of found?.query?.search ?? []) {
@@ -878,18 +883,31 @@ async function enemyWiki(e: Enemy): Promise<EnemyWiki> {
       const text = String(pg?.parse?.wikitext?.['*'] ?? '')
       if (!new RegExp(`filename\\s*=\\s*${e.id}\\s*[\\n|}]`).test(text)) continue
       value.enemyPage = String(pg.parse.title)
-      const ch = enemyCharacter(value.enemyPage, text)
+      const root = value.enemyPage.split('/')[0]
+      // 1. The story tab of the enemy (or of the character an "X/Enemy" page belongs to): its infobox,
+      //    or the first picture on the page ('Amiya', Furnace's Finale/Story).
+      const story = await wikiApi({ action: 'parse', page: `${root}/Story`, prop: 'wikitext', section: '0' }).catch(() => null)
+      const storyText = String(story?.parse?.wikitext?.['*'] ?? '')
+      const box = storyText ? parseInfoboxImages(storyText) : null
+      const forced = box?.images.find(x => x.file === PORTRAIT_OVERRIDE[e.id])
+      let file = forced?.file ?? (box?.images.length ? pickPortrait(box.images, [plain, root])?.file : /\[\[File:([^|\]]+)/i.exec(storyText)?.[1])
+      if (file) value.character = root
+      // 2. Otherwise the character the enemy page links to (Lava, Flame of Resistance -> Lava the Purgatory).
+      const ch = file ? null : enemyCharacter(value.enemyPage, text)
       if (ch) {
-        let box = await infoboxOf(ch.page)
-        if (box?.box?.kind === 'operator') box = (await infoboxOf(`${box.title}/Story`).catch(() => null)) ?? box
-        const forced = box?.box?.images.find(x => x.file === PORTRAIT_OVERRIDE[e.id])
-        const pick = forced ?? (box?.box ? pickPortrait(box.box.images, [e.name.replace(/^'|'$/g, ''), ch.page], ch.hint) : undefined)
-        if (box && pick) {
-          const info = await wikiApi({ action: 'query', titles: `File:${pick.file}`, prop: 'imageinfo', iiprop: 'url' })
-          value.portrait = Object.values<any>(info?.query?.pages ?? {})[0]?.imageinfo?.[0]?.url
-          value.character = box.title.replace(/\/Story$/, '')
+        let cb = await infoboxOf(ch.page)
+        if (cb?.box?.kind === 'operator') cb = (await infoboxOf(`${cb.title}/Story`).catch(() => null)) ?? cb
+        const imgs = cb?.box?.images ?? []
+        // A link to one section of a story ("Amiya/Story#Babel") that has no picture of its own: show none.
+        const hinted = ch.hint ? imgs.find(x => !/operator/i.test(x.label) && normName(x.label).includes(normName(ch.hint))) : undefined
+        const pick = imgs.find(x => x.file === PORTRAIT_OVERRIDE[e.id]) ?? (ch.hint ? hinted : pickPortrait(imgs, [plain, ch.page]))
+        if (cb && pick) {
+          file = pick.file
+          value.character = cb.title.replace(/\/Story$/, '')
         }
       }
+      if (file) value.portrait = await fileUrl(file.trim())
+      if (!value.portrait) value.character = undefined
       break
     }
   } catch {

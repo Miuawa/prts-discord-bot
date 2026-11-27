@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `/enemy` looks at the enemy's story tab first ('Amiya', Furnace's Finale/Story has her own art), and
+  shows no portrait when the wiki points at a story section without one ('Amiya' in Babel).
 - `/enemy` finds each enemy's own wiki page by its game id and takes the portrait from the
   character that page names (Lava, Flame of Resistance: Lava the Purgatory). Enemies that only share
   a name with an operator (the "Catapult", Frost) get no portrait. The Wiki button opens the enemy's
