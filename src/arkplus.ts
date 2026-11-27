@@ -808,10 +808,25 @@ export const enemyBaseName = (name: string) =>
     .replace(/\s+[αβγδεΩ]$/, '')
     .trim()
 
-/** Other handbook entries of the same enemy (variants such as 'Emperor's Blade', Pursuer), current one included. */
+/** Other handbook entries of the same enemy, current one included: same base name ('Emperor's Blade',
+ * Pursuer) or same id with a level suffix (enemy_1025_reveng and _2: Avenger, Hateful Avenger), joined
+ * transitively so 'Hateful Avenger' the Leader comes along too. */
 function enemyVariants(e: Enemy): Enemy[] {
-  const base = normName(enemyBaseName(e.name))
-  return Object.values(plus?.enemies ?? {}).filter(x => normName(enemyBaseName(x.name)) === base)
+  const all = Object.values(plus?.enemies ?? {})
+  const stem = (x: Enemy) => x.id.replace(/_\d+$/, '')
+  const base = (x: Enemy) => normName(enemyBaseName(x.name))
+  const group = new Set<Enemy>([e])
+  for (let grew = true; grew; ) {
+    grew = false
+    const stems = new Set([...group].map(stem)),
+      bases = new Set([...group].map(base))
+    for (const x of all)
+      if (!group.has(x) && (stems.has(stem(x)) || bases.has(base(x)))) {
+        group.add(x)
+        grew = true
+      }
+  }
+  return [...group].sort((a, b) => a.id.localeCompare(b.id))
 }
 
 async function npcPortraits(name: string): Promise<Portraits | null> {
@@ -858,8 +873,10 @@ async function enemyView(e: Enemy): Promise<{ embeds: EmbedBuilder[]; components
     if (vars.length > 5) em.addFields({ name: `Variants (${vars.length})`, value: clip(vars.map(v => (v.id === e.id ? `**${v.name}** (shown)` : v.name)).join('\n'), 1024) })
     rows.push(
       new ActionRowBuilder<ButtonBuilder>().addComponents(
-        vars.slice(0, 5).map(v => {
-          const short = /',\s*(.+)$/.exec(v.name)?.[1] ?? v.name.replace(/^'|'$/g, '')
+        vars.slice(0, 5).map((v, _, shown) => {
+          const label = (x: Enemy) => /',\s*(.+)$/.exec(x.name)?.[1] ?? x.name.replace(/^'|'$/g, '')
+          // Two variants can share a name ('Hateful Avenger' the Elite and the Leader): add the class.
+          const short = shown.filter(x => label(x) === label(v)).length > 1 ? `${label(v)} (${v.level})` : label(v)
           return new ButtonBuilder()
             .setCustomId(`arkp:enemy:${v.id}`)
             .setLabel(clip(short, 80))
