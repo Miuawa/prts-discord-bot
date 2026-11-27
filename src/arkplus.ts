@@ -555,7 +555,7 @@ async function cmdEvents(i: ChatInputCommandInteraction, eph: boolean) {
     if (used < rows.length) text += `\n…and ${rows.length - used} more.`
     return { name, value: text || empty }
   }
-  const e = embed('Events and headhunting').setDescription('Real-time logging activated. Times are shown in your own time zone.')
+  const e = embed('Events and headhunting').setDescription('Schedule synchronised with the game data. Times are shown in your own time zone.')
   if (show !== 'banners') {
     const evs = split(p.events)
     const shown = [...evs.now, ...evs.soon.slice(0, 6)]
@@ -1111,6 +1111,16 @@ const GOALS: [string, string][] = [
   ['masteries', 'Masteries'],
   ['modules', 'Modules'],
 ]
+// Promotion LMD by rarity (1★..6★), from gamedata_const.json evolveGoldCost; character_table's
+// evolveCost lists only the materials. Skills and masteries cost no LMD.
+const PROMOTE_LMD: [number, number][] = [
+  [0, 0],
+  [0, 0],
+  [10000, 0],
+  [15000, 60000],
+  [20000, 120000],
+  [30000, 180000],
+]
 const TIER_NAME = ['', 'Tier 1 (common)', 'Tier 2', 'Tier 3', 'Tier 4', 'Tier 5 (rarest)']
 
 /** The /materials view for one goal, with buttons to switch goal (`arkp:mat:<operator id>:<goal>`). */
@@ -1119,12 +1129,13 @@ function materialsView(p: Plus, id: string, goal: string): { embeds: EmbedBuilde
   const total = new Map<string, number>()
   const parts: string[] = []
   const want = (g: string) => goal === 'everything' || goal === g
-  if (want('elite1') && c.elite[0].length) {
-    sum(total, c.elite[0])
+  const promo = PROMOTE_LMD[c.rarity - 1] ?? [0, 0]
+  if (want('elite1') && (c.elite[0].length || promo[0])) {
+    sum(total, [...c.elite[0], ['4001', promo[0]]])
     parts.push('Elite 1')
   }
-  if (want('elite2') && c.elite[1].length) {
-    sum(total, c.elite[1])
+  if (want('elite2') && (c.elite[1].length || promo[1])) {
+    sum(total, [...c.elite[1], ['4001', promo[1]]])
     parts.push('Elite 2')
   }
   if (want('skills') && c.skills.length) {
@@ -1143,7 +1154,7 @@ function materialsView(p: Plus, id: string, goal: string): { embeds: EmbedBuilde
   const e = embed(`${c.name} · ${label}`).setURL(wikiUrl(c.name)).setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${id}.png`)
   const lmd = total.get('4001') ?? 0
   total.delete('4001')
-  if (!total.size) {
+  if (!total.size && !lmd) {
     e.setDescription(`${'★'.repeat(c.rarity)} ${c.cls} · ${c.name} needs nothing for this goal in the game data.`).setColor(COLOR.dim)
   } else {
     e.setDescription([`${'★'.repeat(c.rarity)} ${c.cls} · covers ${parts.join(', ')}.`, lmd ? `**LMD:** ${lmd.toLocaleString('en-US')}` : ''].filter(Boolean).join('\n'))

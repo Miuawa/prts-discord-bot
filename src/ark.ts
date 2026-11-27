@@ -818,7 +818,8 @@ function loadSheets(): Sheets | null {
       if (!cur) continue
       for (const n of t
         .split(' | ')
-        .map(x => x.trim())
+        // The sheet writes some names as "Kal'tsit· Esperanta".
+        .map(x => x.trim().replace(/(\S)·\s*/g, '$1 '))
         .filter(Boolean)) {
         cur.names.push(n)
         const note = /\(([^)]*)\)\s*$/.exec(n)?.[1]
@@ -870,9 +871,12 @@ function loadSheets(): Sheets | null {
   }
   try {
     const rb = readSheetTabs(files[3])
-    for (const [tab, lines] of rb) {
+    for (let [tab, lines] of rb) {
       const facility = RIIC_FACILITY[tab]
       if (!facility) continue
+      // Teams come first; the WORKERS and BACK TO TOP sections after them are not part of the last team.
+      const endAt = lines.findIndex(l => /^(WORKERS|BACK TO TOP)$/.test(l.trim()))
+      if (endAt >= 0) lines = lines.slice(0, endAt)
       const starts: number[] = []
       lines.forEach((l, k) => {
         if (l.includes('| EFFECT: |') && k > 0) starts.push(k - 1)
@@ -880,7 +884,14 @@ function loadSheets(): Sheets | null {
       starts.forEach((st, n) => {
         const block = lines.slice(st, starts[n + 1] ?? lines.length)
         const [d, eff = ''] = block[1].split('| EFFECT: |')
-        const members = block[2]?.startsWith('(') ? block[2].replace(/^\(|\)$/g, '') : ''
+        // Members are "(A + B + C)" under the description, or a " | " list under the first facility row
+        // ("CC", "PP | FAC | ..."). Other lines in parentheses are effect notes like "(Theoretical max)".
+        const facRow = block.findIndex((l, k) => k >= 2 && /^(CC|FAC|TP|PP|RR|WS|HR|TR|RS|DORM)( \||$)/.test(l.trim()))
+        const members = /^\(.*\+.*\)$/.test(block[2]?.trim() ?? '')
+          ? block[2].trim().replace(/^\(|\)$/g, '')
+          : facRow > 0 && block[facRow + 1] && !/[:"]/.test(block[facRow + 1])
+            ? [...new Set(block[facRow + 1].split(/\s*\|\s*/).filter(t => t && !/^(or|and|[A-Z ]{4,})$/.test(t)))].join(', ')
+            : ''
         const tokens = new Set<string>()
         for (const l of block) for (const t of l.split(/\s*(?:\||\+|,|\(|\))\s*/)) if (t) tokens.add(normName(t))
         s.teams.push({ title: block[0].trim(), facility, members, desc: d.trim(), effect: eff.replace(/\s*\|\s*/g, ' ').trim(), tokens })
@@ -1145,7 +1156,7 @@ async function cmdTier(i: ChatInputCommandInteraction, eph: boolean) {
   const opQ = i.options.getString('operator')
   const want = i.options.getString('tier')
   const cls = i.options.getString('class')
-  const footer = `AK Tier List (fan-made, global, full investment, live from Google Sheets) · checked ${sheetDate('tier-list-aktierlist.txt')}`
+  const footer = `${FOOTER} · AK Tier List (fan-made, global, full investment, live from Google Sheets) · checked ${sheetDate('tier-list-aktierlist.txt')}`
   if (opQ) {
     ensureData()
     const o = findOps(opQ, 1)[0]
@@ -1207,7 +1218,7 @@ function moduleView(o: Op, idx: number, tab: string): { embeds: EmbedBuilder[]; 
     )
     if (points(pros)) e.addFields({ name: 'Pros', value: clip(points(pros), 1024) })
     if (points(cons)) e.addFields({ name: 'Cons', value: clip(points(cons), 1024) })
-    e.setFooter({ text: `DragonGJY module ratings (fan-made, CN-based, ${arch.trim()}) · checked ${sheetDate('module-ratings-dragongjy.txt')}` })
+    e.setFooter({ text: `${FOOTER} · DragonGJY module ratings (fan-made, CN-based, ${arch.trim()}) · checked ${sheetDate('module-ratings-dragongjy.txt')}` })
   } else {
     const fx = m.fx
     if (fx?.trait) e.addFields({ name: `Stage 1 · ${fx.trait.kind === 'add' ? 'trait bonus' : 'new trait'}`, value: clip(fx.trait.text, 400) })
@@ -1305,17 +1316,23 @@ async function cmdFarm(i: ChatInputCommandInteraction, eph: boolean) {
       .setDescription(
         `No stage is worth farming for this material. The sheet's advice: **buy it from event shops instead**.\n[Open the full sheet](https://docs.google.com/spreadsheets/d/1RRiTIYVUNUf-xW8ljAJdYEOuSo23lpjHkPa0-zuC_4k/htmlview)`,
       )
-      .setFooter({ text: `PeterYR farming sheet (fan-made, Penguin Statistics data) · checked ${sheetDate('peteryr-farming.txt')}` })
+      .setFooter({ text: `${FOOTER} · PeterYR farming sheet (fan-made, Penguin Statistics data) · checked ${sheetDate('peteryr-farming.txt')}` })
     return i.reply({ embeds: [e], flags: ephFlag(eph) })
   }
+  // A tier name ("Orirock Cube") lands on its family's tab; say so, so the title does not look wrong.
+  const fam = m.label.replace(/ \(.*\)$/, '')
+  const family =
+    normName(m.label).includes(normName(q)) || normName(m.key) === normName(q)
+      ? ''
+      : `**${clip(q, 60)}** is listed under its material family, **${fam}**. These stages are the most efficient for that family; craft up in the Workshop as needed.\n\n`
   const lines = m.rows
     .slice(0, 10)
     .map(([st, eff, drop], idx) => `\`${String(idx + 1).padStart(2)}\` **${st}** · efficiency ${(eff * 100).toFixed(1)}%${isNaN(drop) ? '' : ` · main drop ${(drop * 100).toFixed(1)}%`}`)
   const e = embed(`Farming: ${m.label}`)
     .setDescription(
-      `${lines.join('\n')}\n\nEfficiency is relative to the best stage (100%). "(perm)" stages are permanent event reruns.\n[Open the full sheet](https://docs.google.com/spreadsheets/d/1RRiTIYVUNUf-xW8ljAJdYEOuSo23lpjHkPa0-zuC_4k/htmlview) · [Penguin Statistics](https://penguin-stats.io)`,
+      `${family}${lines.join('\n')}\n\nEfficiency is relative to the best stage (100%). "(perm)" stages are permanent event reruns.\n[Open the full sheet](https://docs.google.com/spreadsheets/d/1RRiTIYVUNUf-xW8ljAJdYEOuSo23lpjHkPa0-zuC_4k/htmlview) · [Penguin Statistics](https://penguin-stats.io)`,
     )
-    .setFooter({ text: `PeterYR farming sheet (fan-made, Penguin Statistics data) · checked ${sheetDate('peteryr-farming.txt')}` })
+    .setFooter({ text: `${FOOTER} · PeterYR farming sheet (fan-made, Penguin Statistics data) · checked ${sheetDate('peteryr-farming.txt')}` })
   return i.reply({ embeds: [e], flags: ephFlag(eph) })
 }
 
@@ -1562,7 +1579,7 @@ async function cmdStory(i: ChatInputCommandInteraction, eph: boolean) {
 
 function baseOpEmbed(o: Op): EmbedBuilder {
   const sh = loadSheets()
-  const footer = `RIIC base skill guide (fan-made, live from Google Sheets) · checked ${sheetDate('riic-base-skills.txt')}`
+  const footer = `${FOOTER} · RIIC base skill guide (fan-made, live from Google Sheets) · checked ${sheetDate('riic-base-skills.txt')}`
   const e = embed(`Base skills: ${o.name}`).setURL(RIIC_URL).setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${o.id}.png`).setFooter({ text: footer })
   for (const b of (o.base ?? []).slice(0, 6)) e.addFields({ name: `${b.unlock} · ${b.room} · ${b.name}`, value: clip(b.desc, 1024) })
   if (!o.base?.length) e.setDescription('No base skills found in game data.')
@@ -1580,7 +1597,7 @@ async function cmdBase(i: ChatInputCommandInteraction, eph: boolean) {
   const opQ = i.options.getString('operator')
   const teamQ = i.options.getString('team')
   const fac = i.options.getString('facility')
-  const footer = `RIIC base skill guide (fan-made, live from Google Sheets) · checked ${sheetDate('riic-base-skills.txt')}`
+  const footer = `${FOOTER} · RIIC base skill guide (fan-made, live from Google Sheets) · checked ${sheetDate('riic-base-skills.txt')}`
   if (opQ) {
     if (!data) return notReady(i, eph)
     const o = findOps(opQ, 1)[0]
@@ -2556,7 +2573,10 @@ async function cmdHelp(i: ChatInputCommandInteraction, eph: boolean) {
     'All systems operational. Welcome home.\nPick a command from the menu below for its options and examples. Every command also has `private:`, so that only you see the reply.',
   )
   for (const g of [...new Set(HELP.map(h => h.group))]) {
-    const lines = HELP.filter(x => x.group === g).map(h => (h.cmd === 'links' ? `**Useful sites** · \`/help command: links\`` : `**/${h.cmd}** · ${h.short}`))
+    // "Useful sites" goes last in its group, after the commands.
+    const lines = [...HELP.filter(x => x.group === g && x.cmd !== 'links'), ...HELP.filter(x => x.group === g && x.cmd === 'links')].map(h =>
+      h.cmd === 'links' ? `**Useful sites** · \`/help command: links\`` : `**/${h.cmd}** · ${h.short}`,
+    )
     e.addFields({ name: g, value: clip(lines.join('\n'), 1024) })
   }
   e.setFooter({ text: `${FOOTER} · Commands marked (AI) use the AI; everything else is answered instantly by the bot` })
