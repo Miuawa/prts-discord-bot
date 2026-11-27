@@ -1,5 +1,11 @@
 # PRTS Discord bot
 
+[![CI](https://github.com/Miuawa/prts-discord-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/Miuawa/prts-discord-bot/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Miuawa/prts-discord-bot?include_prereleases&sort=semver)](https://github.com/Miuawa/prts-discord-bot/releases)
+[![License](https://img.shields.io/github/license/Miuawa/prts-discord-bot)](LICENSE)
+![Bun](https://img.shields.io/badge/runtime-Bun-black?logo=bun)
+![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)
+
 An unofficial, Arknights-themed Discord bot. Instant commands (operator cards, tier list,
 farming, recruitment, music and more) are answered by the bot itself. `/prts` chat goes to an
 AI of your choice: a [Claude Code](https://code.claude.com) session on your PC (with a Claude
@@ -15,7 +21,8 @@ yourself. Extra features, like the roleplay narrator, are optional
 
 - **Arknights tools, no AI needed**: `/operator`, `/skin`, `/tier`, `/farm`,
   `/recruit`, `/base`, `/events`, `/enemy`, `/stage`, `/compare`, `/materials`, `/myrtle`, `/wiki`,
-  `/story`, `/help`.
+  `/story`, `/help`. Every answer is a compact PRTS card with buttons for details: an operator
+  card opens its modules, outfits, base skills and materials; long lists get page buttons.
 - **Utilities**: `/roll` (dice like `2d6+3`, `4d6kh3`, `d%`; coin toss; pick an option), `/remind`, `/status`.
 - **Voice**: `/music` (local files, uploads, anything `yt-dlp` plays, lyrics) and `/music voice`
   (official operator voice lines).
@@ -60,6 +67,9 @@ Discord ──► src/bot.ts ── instant commands, music, access control (alw
 | `src/ai/` | Backend settings (`config.ts`), the Anthropic and OpenAI-compatible clients (`providers.ts`), history and turn handling for API models (`turns.ts`), the `/prts` prompt (`chat.ts`). |
 | `src/modules.ts` | The module interface and loader. |
 | `src/ark.ts`, `arkplus.ts` | Arknights commands (game data from the ArknightsAssets GitHub mirror, community sheets, wiki, story reader). |
+| `src/equip.ts`, `enemy.ts` | Parsing of module effects and enemy handbook data from the game tables. |
+| `src/theme.ts`, `pages.ts`, `common.ts` | The shared PRTS look (colours, header, footer), page buttons for long replies, and shared URLs and helpers. |
+| `src/visits.ts` | Visit times for PRTS-style greetings in `/prts`. |
 | `src/music.ts`, `lyrics.ts`, `voice.ts` | Music player, lyrics lookup, voice lines. |
 | `src/env.ts`, `paths.ts` | Settings loading and shared folder locations. |
 | `modules/roleplay/` | The roleplay module, with its narrator kit template. |
@@ -305,6 +315,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 - Keep the token and API keys outside the repo (`~/.claude/channels/discord/.env`). The bot
   refuses to upload files from the state folder or the repo `.env` through `reply`.
 - The bridge listens only on 127.0.0.1 and needs the random key in `bridge.key`.
+- Replies can mention users but never `@everyone`, `@here` or roles, whatever text they echo.
+- `/music` plays only public links: addresses on the local machine or network are refused.
+- Found a vulnerability? See [SECURITY.md](SECURITY.md).
 - Discord messages reach the AI as untrusted input. The narrator is told never to change
   access, files or settings because a message asked; keep Claude Code's permission prompts on.
 

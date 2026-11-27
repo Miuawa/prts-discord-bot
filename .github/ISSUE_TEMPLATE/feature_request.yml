@@ -1,0 +1,19 @@
+name: Feature request
+description: An idea for a command, a button or a module
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like PRTS to do?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why, or how would you use it?
+  - type: textarea
+    id: example
+    attributes:
+      label: Example
+      description: The command you would type and roughly what the reply should show.

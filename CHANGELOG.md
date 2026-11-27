@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.1 (2026-11-28)
+
+### Security
+- Replies can no longer ping `@everyone`, `@here` or roles, whatever text they echo.
+- `/music` refuses links to the local machine or private network addresses.
+
+### Changed
+- `/compare` has Operator 1 | Compare | Operator 2 tabs; `/roll` explains only the notation a roll
+  uses, and `/roll coin` takes `heads:` for a weighted coin.
+- Shared URLs and helpers live in `src/common.ts`; `PRTS_GAMEDATA_URL` can point at a mirror.
+- GitHub: README badges, issue and pull request templates, `SECURITY.md`.
+
 ## 0.2.0 (2026-11-28)
 
 A big readability and PRTS-styling update, a new `/enemy` command, and fewer commands overall.
