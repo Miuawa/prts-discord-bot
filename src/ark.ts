@@ -77,6 +77,7 @@ export const ARK_COMMANDS = [
         options: [
           { type: 4, name: 'count', description: 'How many coins (default 1, max 100)', required: false, min_value: 1, max_value: 100 },
           { type: 3, name: 'reason', description: 'What the toss is for', required: false, max_length: 100 },
+          { type: 4, name: 'heads', description: 'Chance of heads in percent (default 50)', required: false, min_value: 1, max_value: 99 },
           {
             type: 3,
             name: 'call',
@@ -1063,13 +1064,23 @@ function diceExplain(expr: string): string {
     const keep = m[4] ? `, keep the ${m[4] === 'kh' ? 'highest' : 'lowest'} ${m[5]}` : ''
     parts.push(`${sign}${n} ${sides} ${n === 1 ? 'die' : 'dice'}${keep}`)
   }
-  return `${parts.join(', ')}.\nNotation: **XdY** = X dice with Y sides · **+N** adds N · **khN / klN** keeps the highest / lowest N dice · **d%** = 1 to 100.`
+  // Explain only the notation this roll actually uses.
+  const e = expr.replace(/\s+/g, '').toLowerCase()
+  const notes = [
+    /\d*d\d/.test(e) ? '**XdY** = X dice with Y sides' : '',
+    /[+-]\d+(?![d\d])|[+-]\d+$/.test(e) || /^\d+[+-]/.test(e) ? '**+N / -N** adds or subtracts N' : '',
+    /kh/.test(e) ? '**khN** keeps the highest N dice' : '',
+    /kl/.test(e) ? '**klN** keeps the lowest N dice' : '',
+    /d%/.test(e) ? '**d%** = a number from 1 to 100' : '',
+  ].filter(Boolean)
+  return `${parts.join(', ')}.${notes.length ? `\nNotation: ${notes.join(' · ')}.` : ''}`
 }
 
 async function cmdCoin(i: ChatInputCommandInteraction, eph: boolean) {
   const n = i.options.getInteger('count') ?? 1
   const call = i.options.getString('call')
-  const flips = Array.from({ length: n }, () => (randInt(2) ? 'Heads' : 'Tails'))
+  const pct = i.options.getInteger('heads') ?? 50
+  const flips = Array.from({ length: n }, () => (randInt(100) < pct ? 'Heads' : 'Tails'))
   const heads = flips.filter(f => f === 'Heads').length
   let desc: string
   if (n === 1) {
@@ -1079,6 +1090,7 @@ async function cmdCoin(i: ChatInputCommandInteraction, eph: boolean) {
     desc = `${flips.map(f => (f === 'Heads' ? 'H' : 'T')).join(' ')}\n\nHeads: **${heads}** · Tails: **${n - heads}** (${((heads / n) * 100).toFixed(1)}% heads)`
     if (call) desc += `\nYour call (${call}) was correct ${call === 'heads' ? heads : n - heads} of ${n} times.`
   }
+  if (pct !== 50) desc += `\nWeighted coin: ${pct}% heads, ${100 - pct}% tails.`
   const reason = i.options.getString('reason')
   return i.reply({ embeds: [embed(`${reason ? clip(reason, 200) : 'Coin toss'}${n > 1 ? ` ×${n}` : ''}`).setDescription(desc)], flags: ephFlag(eph) })
 }
@@ -2699,9 +2711,9 @@ const HELP: HelpEntry[] = [
     cmd: 'roll',
     group: 'Utilities',
     short: 'Dice, coin toss, or let PRTS choose',
-    usage: '/roll dice [dice:<expression>] [reason:<text>] | coin [count:<1-100>] [call:<heads|tails>] [reason:] | choose options:<a | b | c> [reason:]',
+    usage: '/roll dice [dice:<expression>] [reason:<text>] | coin [count:<1-100>] [call:<heads|tails>] [heads:<1-99 %>] [reason:] | choose options:<a | b | c> [reason:]',
     detail:
-      'dice: default 1d20. Supports several dice and modifiers (2d6+3, 1d20+1d4-1), keep highest/lowest (4d6kh3, 2d20kl1), and percentile (d%). Max 100 dice. Kept maximum rolls are bold, dropped dice are struck through, and the reply explains the notation (XdY = X dice with Y sides, +N adds N, khN/klN keeps the highest/lowest N, d% = 1 to 100).\ncoin: one coin, or up to 100 with a heads/tails tally. Call it beforehand if you like.\nchoose: separate options with | or commas; PRTS picks one at random, without hesitation.\nEvery /roll takes an optional reason, shown as the title.',
+      'dice: default 1d20. Supports several dice and modifiers (2d6+3, 1d20+1d4-1), keep highest/lowest (4d6kh3, 2d20kl1), and percentile (d%). Max 100 dice. Kept maximum rolls are bold, dropped dice are struck through, and the reply explains the notation the roll uses.\ncoin: one coin, or up to 100 with a heads/tails tally. Call it beforehand if you like, and set heads: to weight the coin (for example heads: 70 for a 70% chance of heads).\nchoose: separate options with | or commas; PRTS picks one at random, without hesitation.\nEvery /roll takes an optional reason, shown as the title.',
     examples: ['/roll dice', '/roll dice dice: 4d6kh3 reason: Strength', '/roll coin count: 10', '/roll choose options: tea | coffee | juice'],
   },
 
