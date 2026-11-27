@@ -37,7 +37,7 @@ const STORIES_JSON = process.env.PRTS_STORIES_JSON ?? join(DATA_DIR, 'stories.js
 import { COLOR, FOOTER, SECTION, brand, stampEmbeds } from './theme.ts'
 import { CACHE_DIR, DATA_DIR } from './paths.ts'
 import { announce } from './announce.ts'
-import { type ModuleEffect, parseModule, statLine, gradeWord, recLevel } from './equip.ts'
+import { type ModuleEffect, fillTemplate, parseModule, statLine, gradeWord, recLevel } from './equip.ts'
 const CACHE_FILE = join(CACHE_DIR, 'arkdata.json')
 const CACHE_MAX_AGE_MS = 3 * 24 * 3600 * 1000
 const GAMEDATA = 'https://raw.githubusercontent.com/ArknightsAssets/ArknightsGamedata/master/en/gamedata/excel/'
@@ -359,10 +359,20 @@ type Op = {
   modules: OpModule[]
   recruit: boolean
   base: { name: string; room: string; unlock: string; desc: string }[]
+  /** Class trait at the highest promotion (before modules). */
+  trait?: string
+  /** Names of summons and deployables (displayTokenDict). */
+  summons?: string[]
+  /** "Recruitment & Headhunting" etc., from the game data. */
+  obtain?: string
+  /** Ids of the same character's other versions (alters), from char_meta_table. */
+  alts?: string[]
+  /** Class forms the operator can switch between (Amiya: Caster, Guard, Medic). */
+  forms?: string[]
 }
 /** A module from uniequip_table, with its effects from battle_equip_table when known. */
 type OpModule = { name: string; type: string; id?: string; unlock?: string; form?: string; fx?: ModuleEffect }
-const DATA_VERSION = 6
+const DATA_VERSION = 8
 type ArkData = {
   version: number
   builtAt: number
@@ -399,11 +409,12 @@ export const normName = (s: string) =>
 
 async function buildData(): Promise<void> {
   log('building game data cache...')
-  const [chars, equip, battleEquip, patch, teams, gacha, routes, building] = await Promise.all([
+  const [chars, equip, battleEquip, patch, meta, teams, gacha, routes, building] = await Promise.all([
     getJson(GAMEDATA + 'character_table.json'),
     getJson(GAMEDATA + 'uniequip_table.json'),
     getJson(GAMEDATA + 'battle_equip_table.json').catch(e => (log(`battle_equip_table: ${e}`), {})),
     getJson(GAMEDATA + 'char_patch_table.json').catch(() => ({ patchChars: {} })),
+    getJson(GAMEDATA + 'char_meta_table.json').catch(() => ({ spCharGroups: {} })),
     getJson(GAMEDATA + 'handbook_team_table.json'),
     getJson(GAMEDATA + 'gacha_table.json'),
     getJson(TIMO + '/json/routes.json').catch(() => ({ groups: {}, ops: {} })),
@@ -461,6 +472,14 @@ async function buildData(): Promise<void> {
     if (line.includes('Operators displayed')) continue
     for (const n of stripRich(line).split(' / ')) if (n.trim()) pool.add(normName(n))
   }
+  const altsOf: Record<string, string[]> = {}
+  for (const group of Object.values<string[]>(meta.spCharGroups ?? {})) for (const id of group) altsOf[id] = group.filter(x => x !== id)
+  const traitOf = (c: any): string | undefined => {
+    const cands = c.trait?.candidates ?? []
+    const last = cands[cands.length - 1]
+    const text = last?.overrideDescripton || c.description
+    return text ? fillTemplate(text, last?.blackboard) : undefined
+  }
   const ops: Op[] = []
   for (const [id, c] of Object.entries<any>(chars)) {
     if (!id.startsWith('char_') || c.isNotObtainable || !CLASS[c.profession]) continue
@@ -480,6 +499,17 @@ async function buildData(): Promise<void> {
       modules: modsByChar[id] ?? [],
       recruit: pool.has(normName(c.name)),
       base: baseOf(id),
+      trait: traitOf(c),
+      summons: [
+        ...new Set(
+          Object.keys(c.displayTokenDict ?? {})
+            .map(t => chars[t]?.name)
+            .filter(Boolean),
+        ),
+      ] as string[],
+      obtain: stripRich(c.itemObtainApproach ?? '') || undefined,
+      alts: altsOf[id] ?? [],
+      forms: (patch.infos?.[id]?.tmplIds ?? []).map((t: string) => CLASS[(patch.patchChars?.[t] ?? chars[t])?.profession]).filter(Boolean),
     })
   }
   data = {
@@ -1046,42 +1076,28 @@ function moduleCardText(m: OpModule, r?: string[]): string {
   return out.join('\n') || 'No effect data yet.'
 }
 
-async function cmdOperator(i: ChatInputCommandInteraction, eph: boolean) {
-  ensureData()
-  const q = i.options.getString('name', true)
-  if (!data) return notReady(i, eph)
-  const o = findOps(q, 1)[0]
-  if (!o) {
-    // Not an operator: maybe an NPC. Fall back to the wiki.
-    await i.deferReply({ flags: ephFlag(eph) })
-    const w = await wikiLookup(q).catch(() => null)
-    if (!w) return i.editReply({ content: `[PRTS] No operator or wiki record matches "${clip(q, 60)}". Please check the spelling.` })
-    const who = w.data.title ?? q
-    const app = storyAppearances(who) ?? storyAppearances(q)
-    if (app)
-      w.addFields({
-        name: 'Story appearances',
-        value: clip(`Speaks **${app.lines}** lines in **${app.stories}** stories: ${app.groups.join(', ')}. Search them with \`/story\`.`, 1024),
-      })
-    return i.editReply({ embeds: [w.setAuthor({ name: 'No operator file found · Wiki record' })] })
-  }
+/** The /operator card, also opened by the alternate-version buttons (`ark:op:<id>`). */
+function operatorCard(o: Op): { embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder>[] } {
   const sh = loadSheets()
   const e = embed(o.name)
     .setURL(wikiUrl(o.name))
-    .setDescription(
-      [`${stars(o.rarity)} · **${o.cls}** (${o.branch}) · ${o.pos}`, o.faction ? `Affiliation: ${o.faction}` : '', '', o.usage ? `*${clip(o.usage, 300)}*` : '', o.desc ? `> ${clip(o.desc, 200)}` : '']
-        .filter((x, idx) => x !== '' || idx === 2)
-        .join('\n'),
-    )
+    .setDescription([stars(o.rarity), o.usage ? `*${clip(o.usage, 300)}*` : '', o.desc ? `> ${clip(o.desc, 200)}` : ''].filter(Boolean).join('\n'))
     .setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${o.id}.png`)
     .setImage(`https://assets.eltik.net/myrtle/en/textures/chararts/${o.id}/${o.id}_${o.rarity >= 3 ? 2 : 1}.png`)
   const tier = tierText(o, sh)
+  const alts = (o.alts ?? []).map(id => opIndex()?.byId.get(id)).filter((x): x is Op => !!x)
   e.addFields({
     name: 'Profile',
     value: [
-      `**Tier:** ${tier ?? 'not listed'} *(AK Tier List)*`,
-      `**Recruitment:** ${o.recruit ? 'can be found with recruitment permits' : 'not in the recruitment pool (headhunting, events or the shop)'}`,
+      `**Class:** ${o.cls} · **Branch:** ${o.branch}${o.pos ? ` · **Position:** ${o.pos}` : ''}`,
+      (o.forms?.length ?? 0) > 1 ? `**Forms:** ${o.forms!.join(', ')}` : '',
+      o.faction ? `**Faction:** ${o.faction}` : '',
+      o.trait ? `**Trait:** ${clip(o.trait, 300)}` : '',
+      o.summons?.length ? `**Summon:** ${o.summons.join(', ')}` : '',
       o.tags.length ? `**Tags:** ${o.tags.join(', ')}` : '',
+      `**How to get:** ${o.obtain ?? (o.recruit ? 'Recruitment & Headhunting' : 'Headhunting')}${o.recruit ? ' (in the recruitment pool)' : ''}`,
+      `**Tier:** ${tier ?? 'not listed'} *(AK Tier List)*`,
+      alts.length ? `**Alternate:** ${alts.map(a => a.name).join(', ')}` : '',
     ]
       .filter(Boolean)
       .join('\n'),
@@ -1110,7 +1126,40 @@ async function cmdOperator(i: ChatInputCommandInteraction, eph: boolean) {
     ),
     opLinkRow(o),
   ]
-  return i.reply({ embeds: [e], components, flags: ephFlag(eph) })
+  if (alts.length)
+    components.push(
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        alts.slice(0, 5).map(a =>
+          new ButtonBuilder()
+            .setCustomId(`ark:op:${a.id}`)
+            .setStyle(ButtonStyle.Secondary)
+            .setLabel(clip(`Open ${a.name}`, 80)),
+        ),
+      ),
+    )
+  return { embeds: [e], components }
+}
+
+async function cmdOperator(i: ChatInputCommandInteraction, eph: boolean) {
+  ensureData()
+  const q = i.options.getString('name', true)
+  if (!data) return notReady(i, eph)
+  const o = findOps(q, 1)[0]
+  if (!o) {
+    // Not an operator: maybe an NPC. Fall back to the wiki.
+    await i.deferReply({ flags: ephFlag(eph) })
+    const w = await wikiLookup(q).catch(() => null)
+    if (!w) return i.editReply({ content: `[PRTS] No operator or wiki record matches "${clip(q, 60)}". Please check the spelling.` })
+    const who = w.data.title ?? q
+    const app = storyAppearances(who) ?? storyAppearances(q)
+    if (app)
+      w.addFields({
+        name: 'Story appearances',
+        value: clip(`Speaks **${app.lines}** lines in **${app.stories}** stories: ${app.groups.join(', ')}. Search them with \`/story\`.`, 1024),
+      })
+    return i.editReply({ embeds: [w.setAuthor({ name: 'No operator file found · Wiki record' })] })
+  }
+  return i.reply({ ...operatorCard(o), flags: ephFlag(eph) })
 }
 
 // ───────────────────────── /tier ─────────────────────────
@@ -1204,7 +1253,7 @@ function moduleEmbed(o: Op): EmbedBuilder {
 
 /** Buttons under /operator (`ark:<what>:<operator id>`): details, shown privately to whoever presses. */
 export async function handleArkButton(i: ButtonInteraction): Promise<void> {
-  const m = /^ark:(mod|modpc|skin|base):(.+)$/.exec(i.customId)
+  const m = /^ark:(mod|modpc|skin|base|op):(.+)$/.exec(i.customId)
   ensureData()
   const o = m && opIndex()?.byId.get(m[2])
   if (!m || !o) {
@@ -1212,7 +1261,7 @@ export async function handleArkButton(i: ButtonInteraction): Promise<void> {
     return
   }
   const eph = MessageFlags.Ephemeral
-  brand(i, { mod: SECTION.operator, modpc: SECTION.operator, skin: SECTION.skin, base: SECTION.base }[m[1]])
+  brand(i, { mod: SECTION.operator, modpc: SECTION.operator, op: SECTION.operator, skin: SECTION.skin, base: SECTION.base }[m[1]])
   if (m[1] === 'mod') {
     const rated = loadSheets()?.modules.get(normName(o.name)) ?? []
     const components = rated.length
@@ -1221,6 +1270,8 @@ export async function handleArkButton(i: ButtonInteraction): Promise<void> {
     await i.reply({ embeds: [moduleDetailEmbed(o)], components, flags: eph })
   } else if (m[1] === 'modpc') {
     await i.reply({ embeds: [moduleEmbed(o)], flags: eph })
+  } else if (m[1] === 'op') {
+    await i.reply({ ...operatorCard(o), flags: eph })
   } else if (m[1] === 'base') {
     await i.reply({ embeds: [baseOpEmbed(o)], flags: eph })
   } else {
@@ -2356,7 +2407,7 @@ const HELP: HelpEntry[] = [
     short: 'Operator card: class, faction, tier, modules, art, links',
     usage: '/operator name:<operator>',
     detail:
-      'Shows a compact card: rarity, class and branch, faction, position, tier (AK Tier List), whether they can be recruited, tags, their modules with a rating, and E2 art. Buttons open the details privately: **Modules** (what each module does in plain words, its stats, and the DragonGJY verdict, with a further button for pros and cons), **Outfits** (like /skin) and **Base skills** (like /base), plus links to the wiki, Myrtle, story records and voice lines. Names autocomplete as you type. For non-operators (NPCs) it shows a wiki summary and their story appearances.',
+      'Shows a compact card like the wiki infobox: rarity, class, branch, position, faction, trait, summons, tags, how to get them, tier (AK Tier List), alternate versions (with a button to open them), their modules with a rating, and E2 art. Buttons open the details privately: **Modules** (what each module does in plain words, its stats, and the DragonGJY verdict, with a further button for pros and cons), **Outfits** (like /skin) and **Base skills** (like /base), plus links to the wiki, Myrtle, story records and voice lines. Names autocomplete as you type. For non-operators (NPCs) it shows a wiki summary and their story appearances.',
     examples: ['/operator name: Texas', '/operator name: Wang'],
   },
   {
