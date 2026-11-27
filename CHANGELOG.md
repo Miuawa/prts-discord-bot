@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `/myrtle enemies` is gone: enemy handbook progress is now a line in `/myrtle profile`, and enemy
+  details are `/enemy`.
 - New `/enemy`: an enemy's handbook entry (class, type, stats with the stronger stage levels,
   abilities, immunities) from the EN game data, with a link to its wiki enemy page.
 - `/operator` Modules view shows one module per page, with a button per module and an Effects /

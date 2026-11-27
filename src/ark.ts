@@ -265,17 +265,6 @@ export const ARK_COMMANDS = [
       },
       {
         type: 1,
-        name: 'enemies',
-        description: "A player's enemy handbook progress",
-        options: [
-          { type: 3, name: 'player', description: 'Name, Name#1234, UID or myrtle.moe link (default: your linked account)', required: false, autocomplete: true, max_length: 100 },
-          { type: 6, name: 'user', description: 'A Discord user who linked their account', required: false },
-          { type: 3, name: 'enemy', description: 'Check whether they have met enemies whose name contains this', required: false, max_length: 60, autocomplete: true },
-          PRIVATE_OPT,
-        ],
-      },
-      {
-        type: 1,
         name: 'plans',
         description: "A player's public operator plans",
         options: [
@@ -2005,38 +1994,6 @@ async function cmdMyrtle(i: ChatInputCommandInteraction, eph: boolean) {
     return i.editReply({ embeds: [e] })
   }
 
-  if (sub === 'enemies') {
-    const en: { encounteredCount?: number; handbookTotal?: number; enemies?: { enemyId: string; name: string; enemyIndex?: string; sortId?: number }[] } | null = await myrtleGet(
-      `encountered-enemies?uid=${u.uid}`,
-    ).catch(() => null)
-    if (!en || typeof en.encounteredCount !== 'number') return fail(i, `**${tag(u)}** does not share enemy handbook progress publicly.`)
-    const total = en.handbookTotal ?? 0
-    // The raw count includes hidden and duplicate entries (it can pass 100%), so count handbook entries instead.
-    const met = new Set((en.enemies ?? []).filter(x => x.name && x.enemyIndex).map(x => x.enemyIndex)).size || en.encounteredCount
-    const e = embed(`${tag(u)} · Enemy handbook`)
-      .setURL(`${myrtleUrl(u.uid)}?tab=enemies`)
-      .setThumbnail(myrtleAvatar(u.avatar_id))
-      .setDescription(
-        `**${met}**${total ? ` of **${total}** handbook enemies encountered (**${Math.min(100, (met / total) * 100).toFixed(1)}%**)` : ' enemies encountered'}\nAdd \`enemy:\` to check whether they have met a particular enemy.`,
-      )
-    const q = (i.options.getString('enemy') ?? '').trim().toLowerCase()
-    if (q) {
-      const hits = (en.enemies ?? []).filter(x => x.name && fixText(x.name).toLowerCase().includes(q)).sort((a, b) => (a.sortId ?? 0) - (b.sortId ?? 0))
-      e.addFields({
-        name: `Met, matching "${clip(q, 40)}" (${hits.length})`,
-        value: clip(
-          hits
-            .slice(0, 40)
-            .map(x => fixText(x.name))
-            .join(' · ') || 'None met yet, or no such enemy.',
-          1000,
-        ),
-      })
-    }
-    e.setFooter({ text: `${FOOTER} · Data from myrtle.moe` })
-    return i.editReply({ embeds: [e] })
-  }
-
   if (sub === 'plans') {
     const pl: { id?: string; operator_id: string; groups?: string[] }[] | null = await myrtleGet(`plans/public?uid=${u.uid}`).catch(() => null)
     if (!Array.isArray(pl) || !pl.length) return fail(i, `**${tag(u)}** has no public operator plans.`)
@@ -2137,13 +2094,17 @@ async function cmdMyrtle(i: ChatInputCommandInteraction, eph: boolean) {
   }
 
   // profile
-  const [score, supports, rank] = await Promise.all([
+  const [score, supports, rank, enemies] = await Promise.all([
     myrtleGet(`get-user-score?uid=${u.uid}`).catch(() => null),
     myrtleGet(`get-user-supports?uid=${u.uid}`).catch(() => null),
     myrtleGet(`leaderboard?q=${encodeURIComponent(u.nickname)}&limit=50`)
       .then(r => (r?.entries ?? []).find((x: MUser) => x.uid === u.uid))
       .catch(() => null),
+    myrtleGet(`encountered-enemies?uid=${u.uid}`).catch(() => null),
   ])
+  // Enemy handbook progress. The raw count includes hidden and duplicate entries (it can pass 100%), so count handbook entries.
+  const hb: { encounteredCount?: number; handbookTotal?: number; enemies?: { name?: string | null; enemyIndex?: string | null }[] } | null = enemies
+  const met = hb && typeof hb.encounteredCount === 'number' ? new Set((hb.enemies ?? []).filter(x => x.name && x.enemyIndex).map(x => x.enemyIndex)).size || hb.encounteredCount : null
   const now = Date.now() / 1000
   const sec = u.secretary ? opName(u.secretary) : null
   const e = embed(tag(u))
@@ -2157,6 +2118,7 @@ async function cmdMyrtle(i: ChatInputCommandInteraction, eph: boolean) {
       `**Account score:** ${s.grade ?? u.grade ?? '?'} · ${pct(s.total_score)}`,
       rank?.rank_global ? `**Rank:** #${num(rank.rank_global)} global · #${num(rank.rank_server)} ${u.server}` : '',
       `**Collection:** ${u.operator_count ?? roster.length} operators · ${u.skin_count ?? '?'} outfits`,
+      met != null ? `**Enemy handbook:** ${met}${hb?.handbookTotal ? ` of ${hb.handbookTotal} (${Math.min(100, (met / hb.handbookTotal) * 100).toFixed(1)}%)` : ''} encountered` : '',
     ]
       .filter(Boolean)
       .join('\n'),
@@ -2480,7 +2442,7 @@ const HELP: HelpEntry[] = [
     cmd: 'myrtle',
     group: 'Arknights records',
     short: 'Myrtle.moe player profiles, rosters and leaderboard',
-    usage: '/myrtle profile|roster|pulls|inventory|lookback|showcase|enemies|plans [player:] [user:] · search name: · leaderboard [sort] [server] · link player: · unlink',
+    usage: '/myrtle profile|roster|pulls|inventory|lookback|showcase|plans [player:] [user:] · search name: · leaderboard [sort] [server] · link player: · unlink',
     detail: [
       'Reads public player data from [myrtle.moe](https://myrtle.moe) (players upload their own account there).',
       '**/myrtle profile [player:] [user:]** level, server, UID, account score and grade, rank, score breakdown, support units, roster stats, account info and a link to the profile',
@@ -2489,7 +2451,6 @@ const HELP: HelpEntry[] = [
       '**/myrtle inventory [player:] [user:] [item:]** public item inventory, highest rarity first, or only items matching a name',
       '**/myrtle lookback [player:] [user:]** progress snapshots over time (operators, E2, masteries, modules, score) with changes between them',
       '**/myrtle showcase [player:] [user:]** favourite operators, enemies and outfits, plus tier lists, from their profile showcase',
-      '**/myrtle enemies [player:] [user:] [enemy:]** enemy handbook progress, or whether they have met enemies matching a name',
       '**/myrtle plans [player:] [user:]** public operator plans, grouped',
       '**/myrtle search name:** find players by in-game name',
       '**/myrtle leaderboard [sort:] [server:]** top 15 by total or one category',
