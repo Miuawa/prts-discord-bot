@@ -1067,7 +1067,7 @@ function operatorCard(o: Op): { embeds: EmbedBuilder[]; components: ActionRowBui
     .setURL(wikiUrl(o.name))
     .setDescription([stars(o.rarity), o.usage ? `*${clip(o.usage, 300)}*` : '', o.desc ? `> ${clip(o.desc, 200)}` : ''].filter(Boolean).join('\n'))
     .setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${o.id}.png`)
-    .setImage(`https://assets.eltik.net/myrtle/en/textures/chararts/${o.id}/${o.id}_${o.rarity >= 3 ? 2 : 1}.png`)
+    .setImage(`https://assets.eltik.net/myrtle/en/textures/chararts/${o.id}/${o.id}_${o.rarity >= 4 ? 2 : 1}.png`)
   const tier = tierText(o, sh)
   const alts = (o.alts ?? []).map(id => opIndex()?.byId.get(id)).filter((x): x is Op => !!x)
   e.addFields({
