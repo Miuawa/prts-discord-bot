@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `/enemy` picks the NPC art for enemies who are also operators (Talulah, Crownslayer) from the
+  wiki's Story page, and art named after the variant (Talulah, the Fighter). `/operator` for a name
+  not in the EN data (NPCs, CN-only operators) shows the wiki picture.
 - `/enemy` shows the portrait from the wiki page of story enemies (Jesselton Williams, Yurodstvo,
   Patriot, Emperor's Blade...) with a Character page link, and buttons to switch between an enemy's
   variants ('Emperor's Blade', Pursuer, Halberd Breaker; Originium Slug α, β).

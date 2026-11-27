@@ -59,14 +59,18 @@ test('parses the handbook and battle stats', () => {
   expect(statLines(e.stats!)[0]).toBe('**HP** 1,000 · **ATK** 200 · **DEF** 50 · **RES** 20')
 })
 
-test('reads NPC portraits from the wiki infobox', async () => {
-  const { parseInfoboxImages } = await import('../src/arkplus.ts')
+test('reads infobox images and picks the one that fits the enemy', async () => {
+  const { parseInfoboxImages, pickPortrait } = await import('../src/arkplus.ts')
   const npc = '{{NPC tab}}\n{{Character infobox\n|name = Jesselton Williams\n|image = \nJesselton Williams jailer.png:Jailer;\nJesselton Williams killer.png:Killer;\n|othername = X\n}}'
-  expect(parseInfoboxImages(npc)).toEqual([{ file: 'Jesselton Williams jailer.png', label: 'Jailer' }])
-  const op = '{{Operator infobox\n|name = Talulah\n|image = \nTalulah.png:Base;\nTalulah Elite 2.png:Elite 2\n|cnname = x}}'
-  expect(parseInfoboxImages(op)).toEqual([{ file: 'Talulah.png', label: 'Operator art' }])
-  expect(parseInfoboxImages('no infobox')).toEqual([])
-  expect(parseInfoboxImages("{{Faction infobox\n|name = Emperor's Blades\n|image = Emperor's Blade.png\n|othername = x")).toEqual([{ file: "Emperor's Blade.png", label: 'Portrait' }])
+  const j = parseInfoboxImages(npc)!
+  expect(j.kind).toBe('character')
+  expect(pickPortrait(j.images, 'Jesselton Williams')?.file).toBe('Jesselton Williams jailer.png')
+  const story = '{{Character infobox\n|name = Talulah Artorius\n|image = \nTalulah.png:Operator;\nTalulah (Act I).png:NPC (Prologue to Act II);\nTalulah, the Fighter.png:NPC (past)\n|othername = x'
+  const t = parseInfoboxImages(story)!.images
+  expect(pickPortrait(t, 'Talulah')?.file).toBe('Talulah (Act I).png')
+  expect(pickPortrait(t, 'Talulah, the Fighter')?.file).toBe('Talulah, the Fighter.png')
+  expect(parseInfoboxImages('{{Operator infobox\n|name = Talulah\n|image = \nTalulah.png:Base\n|cnname = x}}')?.kind).toBe('operator')
+  expect(parseInfoboxImages('no infobox')).toBeNull()
 })
 
 test('groups enemy variants by base name', async () => {

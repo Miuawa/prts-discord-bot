@@ -1119,6 +1119,9 @@ async function cmdOperator(i: ChatInputCommandInteraction, eph: boolean) {
         name: 'Story appearances',
         value: clip(`Speaks **${app.lines}** lines in **${app.stories}** stories: ${app.groups.join(', ')}. Search them with \`/story\`.`, 1024),
       })
+    // arkplus imports this file, so load it lazily here.
+    const art = await import('./arkplus.ts').then(m => m.wikiPortrait(who)).catch(() => null)
+    if (art) w.setImage(art)
     return i.editReply({ embeds: [w.setAuthor({ name: 'No operator file found · Wiki record' })] })
   }
   return i.reply({ ...operatorCard(o), flags: ephFlag(eph) })

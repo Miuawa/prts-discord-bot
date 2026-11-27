@@ -775,21 +775,35 @@ function enemyEmbed(e: Enemy): EmbedBuilder {
 type Portraits = { page: string; images: { label: string; url: string }[] }
 const portraitCache = new Map<string, { at: number; value: Portraits | null }>()
 
-export function parseInfoboxImages(wikitext: string): { file: string; label: string }[] {
+/** Every image in a wiki infobox, with its tab label ("Talulah (Act I).png:NPC (Prologue to Act II)"). */
+export function parseInfoboxImages(wikitext: string): { kind: 'character' | 'operator' | 'faction'; images: { file: string; label: string }[] } | null {
   const at = wikitext.search(/\{\{\s*(Character|Operator|Faction) infobox/i)
-  if (at < 0) return []
-  const operator = /^\{\{\s*Operator/i.test(wikitext.slice(at))
-  const m = /\n\s*\|\s*image\s*=([\s\S]*?)(?=\n\s*\||\}\})/.exec(wikitext.slice(at))
-  if (!m) return []
-  return m[1]
+  if (at < 0) return null
+  const head = wikitext.slice(at)
+  const kind = /^\{\{\s*Operator/i.test(head) ? 'operator' : /^\{\{\s*Faction/i.test(head) ? 'faction' : 'character'
+  const m = /\n\s*\|\s*image\s*=([\s\S]*?)(?=\n\s*\||\}\})/.exec(head)
+  const images = (m?.[1] ?? '')
     .split(/[;\n]/)
     .map(x => x.trim())
     .filter(x => /\.(png|jpe?g|webp|gif)/i.test(x))
     .map(x => {
       const [file, label] = x.split(/:(?=[^:]*$)/)
-      return { file: file.trim(), label: operator ? 'Operator art' : (label ?? '').trim() || 'Portrait' }
+      return { file: file.trim(), label: (label ?? '').trim() }
     })
-    .slice(0, 1) // later images are often other people or looks that differ from the enemy sprite
+  return { kind, images }
+}
+
+/** Which infobox image fits an enemy: one named after it (Talulah, the Fighter), else an NPC tab, else the first
+ * that is not the operator art.
+ * Later images are often other people or looks (Yurodstvo's other avatars), so the first is the safe default. */
+export function pickPortrait(images: { file: string; label: string }[], enemyName: string): { file: string; label: string } | undefined {
+  const n = normName(enemyName)
+  return (
+    images.find(x => !/^operator$/i.test(x.label) && normName(x.file.replace(/\.\w+$/, '')) === n) ??
+    images.find(x => /^NPC\b/i.test(x.label)) ??
+    images.find(x => !/^operator$/i.test(x.label)) ??
+    images[0]
+  )
 }
 
 async function wikiApi(params: Record<string, string>): Promise<any> {
@@ -829,39 +843,55 @@ function enemyVariants(e: Enemy): Enemy[] {
   return [...group].sort((a, b) => a.id.localeCompare(b.id))
 }
 
-async function npcPortraits(name: string): Promise<Portraits | null> {
-  const hit = portraitCache.get(name)
+async function infoboxOf(page: string): Promise<{ title: string; box: ReturnType<typeof parseInfoboxImages> } | null> {
+  const r = await wikiApi({ action: 'parse', page, prop: 'wikitext', section: '0' })
+  if (!r?.parse) return null
+  return { title: String(r.parse.title ?? page), box: parseInfoboxImages(String(r.parse.wikitext?.['*'] ?? '')) }
+}
+
+/** The portrait for an enemy from its wiki page. Operator pages (Crownslayer, Talulah) keep the NPC art on "<page>/Story". */
+async function npcPortraits(name: string, enemyName: string): Promise<Portraits | null> {
+  const key = `${name}\n${enemyName}`
+  const hit = portraitCache.get(key)
   if (hit && Date.now() - hit.at < 6 * 3600_000) return hit.value
   let value: Portraits | null = null
   try {
-    const page = await wikiApi({ action: 'parse', page: name, prop: 'wikitext', section: '0' })
-    const files = parseInfoboxImages(String(page?.parse?.wikitext?.['*'] ?? ''))
-    if (files.length) {
-      const info = await wikiApi({ action: 'query', titles: files.map(f => `File:${f.file}`).join('|'), prop: 'imageinfo', iiprop: 'url' })
-      const urls = new Map<string, string>()
-      for (const pg of Object.values<any>(info?.query?.pages ?? {}))
-        if (pg?.imageinfo?.[0]?.url)
-          urls.set(
-            String(pg.title)
-              .replace(/^File:/, '')
-              .replace(/_/g, ' '),
-            pg.imageinfo[0].url,
-          )
-      const images = files.map(f => ({ label: f.label, url: urls.get(f.file.replace(/_/g, ' ')) ?? '' })).filter(x => x.url)
-      if (images.length) value = { page: String(page.parse.title ?? name), images }
+    let pg = await infoboxOf(name)
+    if (pg?.box?.kind === 'operator') pg = (await infoboxOf(`${pg.title}/Story`).catch(() => null)) ?? pg
+    const pick = pg?.box ? pickPortrait(pg.box.images, enemyName) : undefined
+    if (pg && pick) {
+      const info = await wikiApi({ action: 'query', titles: `File:${pick.file}`, prop: 'imageinfo', iiprop: 'url' })
+      const url = Object.values<any>(info?.query?.pages ?? {})[0]?.imageinfo?.[0]?.url
+      if (url) value = { page: pg.title.replace(/\/Story$/, ''), images: [{ label: pick.label || 'Portrait', url }] }
     }
   } catch {
     if (hit) return hit.value
   }
-  portraitCache.set(name, { at: Date.now(), value })
+  portraitCache.set(key, { at: Date.now(), value })
   return value
+}
+
+/** The main picture of a wiki page for /operator's wiki fallback: operator art on an operator page
+ * (operators not yet on EN, such as Talulah), otherwise the NPC portrait. */
+export async function wikiPortrait(page: string): Promise<string | null> {
+  try {
+    const pg = await infoboxOf(page)
+    const imgs = pg?.box?.images ?? []
+    const pick = pg?.box?.kind === 'operator' ? imgs[0] : pickPortrait(imgs, page)
+    if (!pick) return null
+    const info = await wikiApi({ action: 'query', titles: `File:${pick.file}`, prop: 'imageinfo', iiprop: 'url' })
+    return Object.values<any>(info?.query?.pages ?? {})[0]?.imageinfo?.[0]?.url ?? null
+  } catch {
+    return null
+  }
 }
 
 /** The /enemy reply, with buttons for the enemy's other variants (`arkp:enemy:<enemy id>`). */
 async function enemyView(e: Enemy): Promise<{ embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder>[] }> {
   const em = enemyEmbed(e)
   const base = enemyBaseName(e.name)
-  const pr = (await npcPortraits(base)) ?? (base !== e.name ? await npcPortraits(e.name) : null)
+  const plain = e.name.replace(/^'|'$/g, '')
+  const pr = (await npcPortraits(base, plain)) ?? (base !== plain ? await npcPortraits(plain, plain) : null)
   const rows: ActionRowBuilder<ButtonBuilder>[] = []
   if (pr) {
     em.setImage(pr.images[0].url)
