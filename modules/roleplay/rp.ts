@@ -134,7 +134,6 @@ export const RP_COMMAND = {
       options: [{ type: 4, name: 'minutes', description: 'Minutes to wait before reminding (default 15, 0 turns it off)', required: true, min_value: 0, max_value: 240 }],
     },
     { type: 1, name: 'players', description: 'Show who plays which character' },
-    { type: 1, name: 'status', description: 'Is this a roleplay channel, and is it paused?' },
     { type: 1, name: 'pause', description: 'Pause narration here: plain messages are ignored until /rp resume' },
     { type: 1, name: 'resume', description: 'Resume narration in this channel' },
     {
@@ -149,9 +148,12 @@ export const RP_COMMAND = {
       description: 'Owner: stop roleplay in a channel (default: this one)',
       options: [{ type: 7, name: 'channel', description: 'Channel (default: the current one)', required: false }],
     },
-    { type: 1, name: 'channels', description: 'List roleplay channels' },
+    { type: 1, name: 'channels', description: 'List roleplay channels and whether this channel is one' },
   ],
 }
+
+/** A short PRTS notice for refusals and mistakes, shown only to the person who used the command. */
+const notice = (text: string, title = 'Request declined') => ({ embeds: [embed(title, COLOR.warn).setDescription(text)], flags: MessageFlags.Ephemeral as const })
 
 function embed(title: string, color = COLOR.info): EmbedBuilder {
   return new EmbedBuilder().setColor(color).setAuthor({ name: 'PRTS · Roleplay Module' }).setTitle(title).setFooter({ text: FOOTER })
@@ -210,15 +212,41 @@ export function clearAfk(userId: string): boolean {
 }
 
 // ---------- turn reminders ----------
-// When some players have acted and others have not, remind the others once after
-// a while. A real narrator turn (a long reply) starts a new round.
+// Each roleplay channel keeps its own session: the players who have written there recently. When some
+// of them have acted and others have not, the others are reminded once (pinged) after a while. Players of
+// other channels are never reminded here. A real narrator turn (a long reply) starts a new round.
 const DEFAULT_NUDGE_MIN = 15
+const SESSION_MS = 12 * 3600_000 // a player who has not written in a channel for 12 hours has left its session
 type Round = { acted: Set<string>; since: number; nudged: boolean }
 const rounds = new Map<string, Round>()
-const knownIds = new Map<string, string>() // lowercase username -> Discord id, learned from messages
+const PART_FILE = join(CACHE_DIR, 'rp-participants.json')
+type Participants = Record<string, Record<string, { id: string; last: number }>> // channel -> username -> who/when
+function loadParts(): Participants {
+  try {
+    return JSON.parse(readFileSync(PART_FILE, 'utf8'))
+  } catch {
+    return {}
+  }
+}
+function saveParts(p: Participants): void {
+  try {
+    mkdirSync(CACHE_DIR, { recursive: true })
+    writeFileSync(PART_FILE, JSON.stringify(p))
+  } catch {}
+}
+/** The players in this channel's session, with their characters (players with no character are left out). */
+export function sessionPlayers(channelId: string): { username: string; id: string; character: string; last: number }[] {
+  const chars = new Map(readPlayers().map(([u, c]) => [u.toLowerCase(), c]))
+  return Object.entries(loadParts()[channelId] ?? {})
+    .filter(([, v]) => Date.now() - v.last < SESSION_MS)
+    .map(([u, v]) => ({ username: u, id: v.id, character: chars.get(u) ?? '', last: v.last }))
+    .filter(p => p.character)
+}
 
 export function noteRpMessage(channelId: string, username: string, userId: string): void {
-  knownIds.set(username.toLowerCase(), userId)
+  const parts = loadParts()
+  ;(parts[channelId] ??= {})[username.toLowerCase()] = { id: userId, last: Date.now() }
+  saveParts(parts)
   const r = rounds.get(channelId) ?? { acted: new Set<string>(), since: Date.now(), nudged: false }
   if (!r.acted.size) r.since = Date.now()
   r.acted.add(username.toLowerCase())
@@ -235,21 +263,41 @@ export async function nudgeTick(client: Client): Promise<void> {
     const minutes = ch?.nudgeMin ?? DEFAULT_NUDGE_MIN
     if (!ch || ch.paused || !minutes || r.nudged || !r.acted.size) continue
     if (Date.now() - r.since < minutes * 60_000) continue
-    const waiting = readPlayers()
-      .map(([u, c]) => ({ u: u.toLowerCase(), c }))
-      .filter(p => !r.acted.has(p.u) && !away.has(p.u))
+    const waiting = sessionPlayers(channelId).filter(p => !r.acted.has(p.username) && !away.has(p.username))
     if (!waiting.length) continue
     r.nudged = true
-    const text = waiting.map(p => (knownIds.get(p.u) ? `<@${knownIds.get(p.u)}>` : p.c)).join(' ')
-    const names = waiting.map(p => p.c).join(', ')
     try {
       const channel = await client.channels.fetch(channelId)
       if (channel && 'send' in channel)
         await channel.send({
-          content: `\`[PRTS]\` ⏳ The scene is awaiting input from **${names}**. ${text} Operator, please select your action when ready. There is no hurry. Use \`/rp afk\` if you will be away.`,
-          allowedMentions: { parse: ['users'] },
+          content: waiting.map(p => `<@${p.id}>`).join(' '),
+          embeds: [
+            embed('Awaiting input').setDescription(
+              `The scene is waiting for **${waiting.map(p => p.character).join(', ')}**. Operator, please select your action when ready. There is no hurry.\nIf you will be away, use \`/rp afk\` and PRTS will play your character.`,
+            ),
+          ],
+          allowedMentions: { users: waiting.map(p => p.id) },
         })
     } catch {}
+  }
+}
+
+// ---------- messages from people with no character ----------
+// Someone with no character on the roster writes in a roleplay channel: PRTS answers them itself (once per
+// half hour per channel) instead of passing it to the narrator, which would otherwise leave them waiting.
+const unregisteredNoticeAt = new Map<string, number>()
+export function interceptUnregistered(username: string, userId: string, channelId: string, text: string): { embeds: EmbedBuilder[] } | 'drop' | void {
+  if (characterOf(username)) return
+  if (/^\s*(\(\(|ooc:)/i.test(text)) return // out of character: the narrator answers as usual
+  const key = `${channelId}:${userId}`
+  if (Date.now() - (unregisteredNoticeAt.get(key) ?? 0) < 30 * 60_000) return 'drop'
+  unregisteredNoticeAt.set(key, Date.now())
+  return {
+    embeds: [
+      embed('Identity verification', COLOR.warn).setDescription(
+        'No character is on file for you, so this message was not sent to the narrator.\nTo join the story, use `/rp join character:<name>`. To speak out of character, start your message with `OOC:` or use `/rp ooc`.',
+      ),
+    ],
   }
 }
 
@@ -262,26 +310,35 @@ export async function handleRpLocal(i: ChatInputCommandInteraction, client: Clie
   if (sub === 'channels' || sub === 'setchannel' || sub === 'removechannel') {
     const store = loadRp()
     if (sub === 'channels') {
-      const lines = Object.entries(store.channels).map(([id, c]) => `<#${id}> · ${c.paused ? '⏸ paused' : '▶ active'}${c.guildName ? ` · ${c.guildName}` : ''}`)
+      const lines = Object.entries(store.channels).map(
+        ([id, c]) => `<#${id}> · ${c.paused ? 'paused' : 'active'}${c.guildName ? ` · ${c.guildName}` : ''}${id === here || id === parent ? ' · **you are here**' : ''}`,
+      )
+      const st = here ? rpState(here, parent) : null
+      const where =
+        st === 'active'
+          ? 'This channel: **active roleplay**. Write normally, or use `/rp act`.'
+          : st === 'paused'
+            ? 'This channel: **paused**. Plain messages are ignored until `/rp resume`.'
+            : 'This channel: **not a roleplay channel**. Here, PRTS acts as an assistant (`/prts`).'
       await i.reply({
-        embeds: [embed('Roleplay channels').setDescription(lines.join('\n') || 'No roleplay channels are set. Use `/rp setchannel` in the channel you want.')],
+        embeds: [embed('Roleplay channels').setDescription(`${where}\n\n${lines.join('\n') || 'No roleplay channels are registered. Use `/rp setchannel` in the channel you want.'}`)],
         flags: MessageFlags.Ephemeral,
       })
       return true
     }
     if (!OWNERS.includes(i.user.id)) {
-      await i.reply({ content: '[PRTS] Insufficient permissions. Only the roleplay owner can change roleplay channels.', flags: MessageFlags.Ephemeral })
+      await i.reply(notice('Insufficient permissions. Only the roleplay owner can change roleplay channels.'))
       return true
     }
     const picked = i.options.getChannel('channel')
     const id = picked?.id ?? here
     if (!id) {
-      await i.reply({ content: '[PRTS] No channel detected.', flags: MessageFlags.Ephemeral })
+      await i.reply(notice('No channel detected.'))
       return true
     }
     if (sub === 'setchannel') {
       if (i.channel?.isDMBased?.() && !picked) {
-        await i.reply({ content: '[PRTS] Roleplay channels must be server channels.', flags: MessageFlags.Ephemeral })
+        await i.reply(notice('Roleplay channels must be server channels.'))
         return true
       }
       const name = (picked && 'name' in picked ? picked.name : i.channel && 'name' in i.channel ? i.channel.name : null) ?? id
@@ -301,7 +358,7 @@ export async function handleRpLocal(i: ChatInputCommandInteraction, client: Clie
     }
     if (sub === 'removechannel') {
       if (!store.channels[id]) {
-        await i.reply({ content: `[PRTS] <#${id}> is not a roleplay channel.`, flags: MessageFlags.Ephemeral })
+        await i.reply(notice(`<#${id}> is not a roleplay channel.`))
         return true
       }
       delete store.channels[id]
@@ -316,7 +373,7 @@ export async function handleRpLocal(i: ChatInputCommandInteraction, client: Clie
     const character = characterOf(i.user.username)
     if (i.options.getBoolean('away', true)) {
       if (!character) {
-        await i.reply({ content: '[PRTS] I have no character on record for you. Use `/rp join character:<name>` first.', flags: MessageFlags.Ephemeral })
+        await i.reply(notice('I have no character on record for you. Use `/rp join character:<name>` first.'))
         return true
       }
       afk[i.user.id] = { username: i.user.username, character, since: Date.now(), note: i.options.getString('note') ?? undefined }
@@ -331,7 +388,7 @@ export async function handleRpLocal(i: ChatInputCommandInteraction, client: Clie
       })
     } else {
       if (!afk[i.user.id]) {
-        await i.reply({ content: '[PRTS] You are not marked as away.', flags: MessageFlags.Ephemeral })
+        await i.reply(notice('You are not marked as away.'))
         return true
       }
       const c = afk[i.user.id].character
@@ -343,13 +400,13 @@ export async function handleRpLocal(i: ChatInputCommandInteraction, client: Clie
   }
   if (sub === 'reminders') {
     if (!OWNERS.includes(i.user.id)) {
-      await i.reply({ content: '[PRTS] Insufficient permissions. Only the roleplay owner can change this.', flags: MessageFlags.Ephemeral })
+      await i.reply(notice('Insufficient permissions. Only the roleplay owner can change this.'))
       return true
     }
     const store = loadRp()
     const key = here && store.channels[here] ? here : parent && store.channels[parent] ? parent : null
     if (!key) {
-      await i.reply({ content: '[PRTS] This is not a roleplay channel.', flags: MessageFlags.Ephemeral })
+      await i.reply(notice('This is not a roleplay channel.'))
       return true
     }
     const m = i.options.getInteger('minutes', true)
@@ -362,31 +419,23 @@ export async function handleRpLocal(i: ChatInputCommandInteraction, client: Clie
   }
   if (sub === 'players') {
     const rows = readPlayers()
-    await i.reply({
-      embeds: [
-        embed('Roleplay roster')
-          .setDescription(rows.map(([u, c]) => `**${c}**`).join('\n') || 'No players registered. Use `/rp join`.')
-          .addFields({ name: 'Join or switch', value: '`/rp join character:<name>`' }),
-      ],
-    })
-    return true
-  }
-  if (sub === 'status') {
-    const st = here ? rpState(here, parent) : null
-    const text =
-      st === 'active'
-        ? '▶ This is an active roleplay channel. Write normally, or use `/rp act`.'
-        : st === 'paused'
-          ? '⏸ This roleplay channel is paused. Plain messages are ignored. `/rp resume` to continue.'
-          : 'This is not a roleplay channel. Here, PRTS acts as an assistant (`/prts`). The owner can enable roleplay with `/rp setchannel`.'
-    await i.reply({ embeds: [embed('Roleplay status').setDescription(text)], flags: MessageFlags.Ephemeral })
+    const key = here && rpState(here, parent) ? (cachedRp().channels[here] ? here : parent) : null
+    const session = key ? sessionPlayers(key) : []
+    const e = embed('Roleplay roster').setDescription(rows.map(([, c]) => `**${c}**`).join('\n') || 'No players are registered. Use `/rp join`.')
+    if (key)
+      e.addFields({
+        name: 'In this channel',
+        value: session.length ? session.map(p => `**${p.character}** · last wrote <t:${Math.floor(p.last / 1000)}:R>`).join('\n') : 'Nobody has written here in the last 12 hours.',
+      })
+    e.addFields({ name: 'Join or switch', value: '`/rp join character:<name>`' })
+    await i.reply({ embeds: [e] })
     return true
   }
   if (sub === 'pause' || sub === 'resume') {
     const store = loadRp()
     const key = here && store.channels[here] ? here : parent && store.channels[parent] ? parent : null
     if (!key) {
-      await i.reply({ content: '[PRTS] This is not a roleplay channel.', flags: MessageFlags.Ephemeral })
+      await i.reply(notice('This is not a roleplay channel.'))
       return true
     }
     store.channels[key].paused = sub === 'pause'
@@ -406,7 +455,7 @@ export async function handleRpLocal(i: ChatInputCommandInteraction, client: Clie
   // act / ooc / join / recap → the AI, but only inside a roleplay channel.
   if (!(sub in RP_AI_SUBCOMMANDS)) return true
   if (!here || !rpState(here, parent)) {
-    await i.reply({ content: '[PRTS] Roleplay commands work only in a roleplay channel. Use `/rp channels` to find one, or `/prts` to talk to me here.', flags: MessageFlags.Ephemeral })
+    await i.reply(notice('Roleplay commands work only in a roleplay channel. Use `/rp channels` to find one, or `/prts` to talk to me here.'))
     return true
   }
   return false

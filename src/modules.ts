@@ -5,7 +5,7 @@
 //
 // See docs/modules.md for a walkthrough. Everything a module may touch is in
 // this file: the bot never calls into a module in any other way.
-import type { Client, ChatInputCommandInteraction, Message } from 'discord.js'
+import type { EmbedBuilder, Client, ChatInputCommandInteraction, Message } from 'discord.js'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
@@ -40,6 +40,11 @@ export interface PrtsModule {
    * as their parent channel.
    */
   channelState?(channelId: string): 'active' | 'paused' | undefined
+  /**
+   * Checked before a plain message in an active channel goes to the AI. Return a reply (an embed or text)
+   * to answer it yourself instead, or 'drop' to ignore it quietly; return nothing to let it through.
+   */
+  intercept?(msg: Message, channelId: string): { embeds: EmbedBuilder[] } | string | 'drop' | void
   /** A plain message in an active channel of this module is about to go to the AI. Return extra meta. */
   onMessage?(msg: Message, channelId: string): Record<string, string> | void
   /**

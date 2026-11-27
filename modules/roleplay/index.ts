@@ -5,26 +5,26 @@
 // Enable with PRTS_MODULES=roleplay. Settings: RP_* (see README.md here).
 import type { HelpEntry, PrtsModule } from '../../src/modules.ts'
 import { readAiConfig } from '../../src/modules.ts'
-import { RP_COMMAND, RP_AI_SUBCOMMANDS, handleRpLocal, rpState, afkCharacters, clearAfk, noteRpMessage, noteNarratorTurn, nudgeTick, readPlayers } from './rp.ts'
+import { RP_COMMAND, RP_AI_SUBCOMMANDS, handleRpLocal, rpState, afkCharacters, clearAfk, noteRpMessage, noteNarratorTurn, nudgeTick, readPlayers, interceptUnregistered } from './rp.ts'
 import { roleplayPrompt, appendStoryLog, stripPlayerLines } from './prompt.ts'
 
 const HELP: HelpEntry = {
   cmd: 'rp',
   group: 'Roleplay (AI)',
   short: 'Roleplay: act, OOC, join, recap, channels',
-  usage: '/rp act | ooc | join | recap | afk away:<true|false> | players | status | pause | resume | reminders | setchannel | removechannel | channels',
+  usage: '/rp act | ooc | join | recap | afk away:<true|false> | players | pause | resume | reminders | setchannel | removechannel | channels',
   detail: [
     'In a roleplay channel you can simply write normally and the narrator answers. The /rp commands add:',
     '**/rp act text:** your character says or does something (AI)',
     '**/rp ooc text:** talk to the narrator out of character (AI)',
     '**/rp join character:** join the roleplay or switch character (AI checks the character)',
     '**/rp recap [focus:]** a recap of the story so far (AI)',
-    '**/rp players** who plays whom · **/rp status** is this a roleplay channel?',
+    "**/rp players** who plays whom, and who is in this channel's session",
     '**/rp afk away:True** you are away: PRTS plays your character in character until you write again or use **/rp afk away:False**',
-    '**/rp reminders minutes:** owner only: turn reminders, how long before players who have not acted are reminded (0 = off)',
+    '**/rp reminders minutes:** owner only: turn reminders. Only players who wrote in this channel in the last 12 hours are reminded, with a ping (0 = off)',
     '**/rp pause** / **/rp resume** stop or restart narration here (chat freely while paused)',
     '**/rp setchannel [channel:]** / **/rp removechannel [channel:]** owner only: choose roleplay channels',
-    '**/rp channels** list roleplay channels',
+    '**/rp channels** list roleplay channels, and whether this channel is one (and paused)',
     'act, ooc, join and recap only work inside a roleplay channel.',
   ].join('\n'),
   examples: ['/rp act text: I set the teapot down and smile.', '/rp ooc text: brb, dinner', '/rp join character: Amiya', '/rp setchannel'],
@@ -56,6 +56,7 @@ export default function roleplay(): PrtsModule {
       setInterval(() => void nudgeTick(client).catch(() => {}), 60_000).unref()
     },
     channelState: channelId => rpState(channelId) ?? undefined,
+    intercept: (msg, channelId) => interceptUnregistered(msg.author.username, msg.author.id, channelId, msg.content),
     onMessage(msg, channelId) {
       // A player who writes is back from /rp afk, and counts as having acted this round.
       clearAfk(msg.author.id)

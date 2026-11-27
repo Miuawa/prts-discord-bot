@@ -1431,6 +1431,17 @@ async function handleInbound(msg: Message): Promise<void> {
     return
   }
 
+  // A module may answer a message itself (for example a roleplay message from someone with no character).
+  if (result.mod?.intercept) {
+    const owner = msg.channel.isThread() ? (msg.channel.parentId ?? msg.channelId) : msg.channelId
+    const own = result.mod.intercept(msg, owner)
+    if (own === 'drop') return
+    if (own) {
+      await msg.reply({ ...(typeof own === 'string' ? { content: own } : own), allowedMentions: { repliedUser: false } }).catch(() => {})
+      return
+    }
+  }
+
   // Nobody can answer: say so once per channel per 10 minutes, then stay quiet.
   if (!aiAvailable(aiFor(result.mod), aiOnline())) {
     const last = offlineNoticeAt.get(chat_id) ?? 0
