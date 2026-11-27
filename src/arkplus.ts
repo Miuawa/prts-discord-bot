@@ -963,7 +963,9 @@ async function enemyView(e: Enemy): Promise<{ embeds: EmbedBuilder[]; components
   if (wk.enemyPage) em.setURL(wikiUrl(wk.enemyPage))
   if (wk.portrait) {
     em.setImage(wk.portrait)
-    em.setFooter({ text: `${FOOTER} · Enemy handbook, EN game data · Portrait from the Arknights wiki` })
+    // Discord always draws the picture last, above only the footer, so a note about the picture
+    // ("Appears in Talulah's body") goes on the footer's first line, directly under the art.
+    em.setFooter({ text: `${wk.note ? `${wk.note}\n` : ''}${FOOTER} · Enemy handbook, EN game data · Portrait from the Arknights wiki` })
   }
   const vars = enemyVariants(e)
   if (vars.length > 1) {
@@ -998,16 +1000,6 @@ async function enemyView(e: Enemy): Promise<{ embeds: EmbedBuilder[]; components
         .setURL(wikiUrl(wk.character)),
     )
   rows.push(links)
-  // A note about the picture ("Appears in Talulah's body") sits right under it, in a small second embed
-  // that carries the footer, so it reads as a caption instead of footer small print.
-  if (wk.portrait && wk.note) {
-    const caption = new EmbedBuilder()
-      .setColor(em.data.color ?? COLOR.info)
-      .setDescription(`**${wk.note}**`)
-      .setFooter(em.data.footer ?? { text: FOOTER })
-    em.setFooter(null)
-    return { embeds: [em, caption], components: rows }
-  }
   return { embeds: [em], components: rows }
 }
 
