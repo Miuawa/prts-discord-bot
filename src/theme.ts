@@ -34,7 +34,8 @@ export function stampEmbeds(payload: unknown, section: string): unknown {
   if (!section || !payload || typeof payload !== 'object') return payload
   const embeds = (payload as { embeds?: unknown[] }).embeds
   if (!Array.isArray(embeds)) return payload
-  for (const e of embeds) {
+  // Only the first embed gets the header; later ones are captions or continuations of it.
+  for (const e of embeds.slice(0, 1)) {
     if (e instanceof EmbedBuilder) {
       if (!e.data.author) e.setAuthor({ name: `PRTS · ${section}` })
     } else if (e && typeof e === 'object' && !(e as any).author) (e as any).author = { name: `PRTS · ${section}` }
