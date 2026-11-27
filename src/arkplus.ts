@@ -32,7 +32,7 @@ const REMIND_FILE = join(CACHE_DIR, 'reminders.json')
 const GAMEDATA = 'https://raw.githubusercontent.com/ArknightsAssets/ArknightsGamedata/master/en/gamedata/excel/'
 const WIKI = 'https://arknights.wiki.gg'
 const UA = 'PRTS-Discord-bot/1.0 (private Arknights fan bot)'
-const DATA_VERSION = 5
+const DATA_VERSION = 6
 const MAX_AGE_MS = 24 * 3600 * 1000
 const log = (s: string) => process.stderr.write(`prts arkplus: ${s}\n`)
 
@@ -199,7 +199,20 @@ registerHelp([
 ])
 
 // ───────────────────────── data ─────────────────────────
-type Stage = { id: string; code: string; name: string; type: string; diff: string; ap: number; danger: string; desc: string; exp: number; gold: number; drops: [string, string, string, string][] }
+type Stage = {
+  id: string
+  code: string
+  name: string
+  type: string
+  diff: string
+  ap: number
+  danger: string
+  desc: string
+  exp: number
+  gold: number
+  drops: [string, string, string, string][]
+  level?: string
+}
 type CharPlus = {
   name: string
   rarity: number
@@ -297,6 +310,7 @@ async function buildPlus(): Promise<void> {
       exp: s.expGain ?? 0,
       gold: s.goldGain ?? 0,
       drops,
+      level: s.levelId ? String(s.levelId) : undefined,
     })
   }
 
@@ -727,7 +741,45 @@ async function cmdStage(i: ChatInputCommandInteraction, eph: boolean) {
       .setLabel('Wiki search')
       .setURL(`${WIKI}/index.php?search=${encodeURIComponent(s.name)}`),
   )
-  await i.reply({ embeds: [e], components: [links], flags: ephFlag(eph) })
+  // Enemies come from the stage's level file, which can take a moment: acknowledge first.
+  await i.deferReply({ flags: ephFlag(eph) })
+  if (s.level) {
+    const list = await stageEnemies(s.level).catch(() => null)
+    if (list?.length) {
+      const order: Record<string, number> = { Leader: 0, Elite: 1, Normal: 2 }
+      const rows = list
+        .map(x => ({ ...x, e: p.enemies?.[x.id] }))
+        .filter(x => x.e)
+        .sort((a, b) => (order[a.e!.level] ?? 3) - (order[b.e!.level] ?? 3) || b.count - a.count)
+      const line = (x: (typeof rows)[number]) => `${x.e!.level === 'Leader' ? '**' : ''}${x.e!.name}${x.e!.level === 'Leader' ? '**' : ''}${x.count > 1 ? ` ×${x.count}` : ''}`
+      if (rows.length)
+        e.addFields({
+          name: `Enemies (${rows.reduce((n, x) => n + Math.max(1, x.count), 0)})`,
+          value: clip(rows.map(line).join(' · '), 1024) + '\nDetails: `/enemy name:<enemy>`',
+        })
+    }
+  }
+  await i.editReply({ embeds: [e], components: [links] })
+}
+
+// Enemies of a stage, read from its level file (cached): enemy id -> how many spawn.
+const stageEnemyCache = new Map<string, { at: number; list: { id: string; count: number }[] }>()
+async function stageEnemies(level: string): Promise<{ id: string; count: number }[]> {
+  const hit = stageEnemyCache.get(level)
+  if (hit && Date.now() - hit.at < 24 * 3600_000) return hit.list
+  const r = await fetch(`${GAMEDATA.replace(/excel\/$/, '')}levels/${level.toLowerCase()}.json`, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(8000) })
+  if (!r.ok) throw new Error(`level ${r.status}`)
+  const lv: any = await r.json()
+  const count = new Map<string, number>()
+  for (const w of arr(lv.waves))
+    for (const f of arr(w.fragments))
+      for (const a of arr(f.actions)) if (a.actionType === 'SPAWN' && String(a.key).startsWith('enemy_')) count.set(a.key, (count.get(a.key) ?? 0) + (Number(a.count) || 1))
+  // Enemies listed in the level but never spawned by a wave (bosses summoned by scripts) still count once.
+  for (const ref of arr(lv.enemyDbRefs)) if (ref?.id && !count.has(ref.id)) count.set(ref.id, 0)
+  const list = [...count].map(([id, n]) => ({ id, count: n }))
+  stageEnemyCache.set(level, { at: Date.now(), list })
+  if (stageEnemyCache.size > 300) stageEnemyCache.delete(stageEnemyCache.keys().next().value as string)
+  return list
 }
 
 // ───────────────────────── /enemy ─────────────────────────
