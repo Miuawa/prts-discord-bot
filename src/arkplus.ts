@@ -847,16 +847,18 @@ async function infoboxOf(page: string): Promise<{ title: string; box: ReturnType
   return { title: String(r.parse.title ?? page), box: parseInfoboxImages(String(r.parse.wikitext?.['*'] ?? '')) }
 }
 
-type EnemyWiki = { enemyPage?: string; character?: string; portrait?: string; generic?: boolean }
+type EnemyWiki = { enemyPage?: string; character?: string; portrait?: string; note?: string }
 /** Portraits the wiki cannot tell apart (checked by hand): enemy id -> infobox image file. */
 const PORTRAIT_OVERRIDE: Record<string, string> = {
   enemy_2078_skzmst: 'Mon3tr original.png', // Mon2tr is Mon3tr's original form, not the humanoid operator art
 }
-/** Generic story sprites from faction galleries, matched to an enemy by eye (the wiki does not link them):
- * enemy id -> [wiki file, faction page]. */
-const GENERIC_PORTRAIT: Record<string, [string, string]> = {
-  enemy_1002_nsabr: ['Reunion Soldier A.png', 'Reunion'], // Soldier: white mask, vest, knife
-  enemy_1011_wizard: ['Reunion Caster.png', 'Reunion'], // Caster: hooded robe
+/** Pictures chosen by hand where the wiki has no link (checked against the enemy icon): enemy id ->
+ * wiki file, the page the button opens, and a note for the footer. They win over the automatic lookup. */
+const CHOSEN_PORTRAIT: Record<string, { file: string; page: string; note: string }> = {
+  enemy_1002_nsabr: { file: 'Reunion Soldier A.png', page: 'Reunion', note: 'Generic Reunion story art' }, // Soldier
+  enemy_1011_wizard: { file: 'Reunion Caster.png', page: 'Reunion', note: 'Generic Reunion story art' }, // Caster
+  // The Deathless Black Snake fights in Talulah's body, so show what the player faces.
+  enemy_1515_bsnake: { file: 'Talulah (Act I).png', page: 'Talulah', note: "Appears in Talulah's body" },
 }
 const enemyWikiCache = new Map<string, { at: number; value: EnemyWiki }>()
 
@@ -882,7 +884,7 @@ async function enemyWiki(e: Enemy): Promise<EnemyWiki> {
     return Object.values<any>(info?.query?.pages ?? {})[0]?.imageinfo?.[0]?.url as string | undefined
   }
   const plain = e.name.replace(/^'|'$/g, '')
-  const generic = GENERIC_PORTRAIT[e.id]
+  const chosen = CHOSEN_PORTRAIT[e.id]
   try {
     const found = await wikiApi({ action: 'query', list: 'search', srsearch: `insource:"${e.id}"`, srlimit: '5', srnamespace: '0' })
     for (const r of found?.query?.search ?? []) {
@@ -897,8 +899,9 @@ async function enemyWiki(e: Enemy): Promise<EnemyWiki> {
       const storyText = String(story?.parse?.wikitext?.['*'] ?? '')
       const box = storyText ? parseInfoboxImages(storyText) : null
       const forced = box?.images.find(x => x.file === PORTRAIT_OVERRIDE[e.id])
-      let file = forced?.file ?? (box?.images.length ? pickPortrait(box.images, [plain, root])?.file : /\[\[File:([^|\]]+)/i.exec(storyText)?.[1])
-      if (file) value.character = root
+      let file = chosen?.file ?? forced?.file ?? (box?.images.length ? pickPortrait(box.images, [plain, root])?.file : /\[\[File:([^|\]]+)/i.exec(storyText)?.[1])
+      if (file) value.character = chosen?.page ?? root
+      if (chosen) value.note = chosen.note
       // 2. Otherwise the character the enemy page links to (Lava, Flame of Resistance -> Lava the Purgatory).
       const ch = file ? null : enemyCharacter(value.enemyPage, text)
       if (ch) {
@@ -912,11 +915,6 @@ async function enemyWiki(e: Enemy): Promise<EnemyWiki> {
           file = pick.file
           value.character = cb.title.replace(/\/Story$/, '')
         }
-      }
-      if (!file && generic) {
-        file = generic[0]
-        value.character = generic[1]
-        value.generic = true
       }
       if (file) value.portrait = await fileUrl(file.trim())
       if (!value.portrait) value.character = undefined
@@ -954,7 +952,7 @@ async function enemyView(e: Enemy): Promise<{ embeds: EmbedBuilder[]; components
   if (wk.portrait) {
     em.setImage(wk.portrait)
     em.setFooter({
-      text: `${FOOTER} · Enemy handbook, EN game data · ${wk.generic ? `Generic ${wk.character} story art from the Arknights wiki` : 'Portrait from the Arknights wiki'}`,
+      text: `${FOOTER} · Enemy handbook, EN game data · ${wk.note ? `${wk.note} (picture from the Arknights wiki)` : 'Portrait from the Arknights wiki'}`,
     })
   }
   const vars = enemyVariants(e)
@@ -986,7 +984,7 @@ async function enemyView(e: Enemy): Promise<{ embeds: EmbedBuilder[]; components
     links.addComponents(
       new ButtonBuilder()
         .setStyle(ButtonStyle.Link)
-        .setLabel(wk.generic ? `${wk.character} page` : 'Character page')
+        .setLabel(wk.note ? `${wk.character} page` : 'Character page')
         .setURL(wikiUrl(wk.character)),
     )
   rows.push(links)
