@@ -847,10 +847,16 @@ async function infoboxOf(page: string): Promise<{ title: string; box: ReturnType
   return { title: String(r.parse.title ?? page), box: parseInfoboxImages(String(r.parse.wikitext?.['*'] ?? '')) }
 }
 
-type EnemyWiki = { enemyPage?: string; character?: string; portrait?: string }
+type EnemyWiki = { enemyPage?: string; character?: string; portrait?: string; generic?: boolean }
 /** Portraits the wiki cannot tell apart (checked by hand): enemy id -> infobox image file. */
 const PORTRAIT_OVERRIDE: Record<string, string> = {
   enemy_2078_skzmst: 'Mon3tr original.png', // Mon2tr is Mon3tr's original form, not the humanoid operator art
+}
+/** Generic story sprites from faction galleries, matched to an enemy by eye (the wiki does not link them):
+ * enemy id -> [wiki file, faction page]. */
+const GENERIC_PORTRAIT: Record<string, [string, string]> = {
+  enemy_1002_nsabr: ['Reunion Soldier A.png', 'Reunion'], // Soldier: white mask, vest, knife
+  enemy_1011_wizard: ['Reunion Caster.png', 'Reunion'], // Caster: hooded robe
 }
 const enemyWikiCache = new Map<string, { at: number; value: EnemyWiki }>()
 
@@ -876,6 +882,7 @@ async function enemyWiki(e: Enemy): Promise<EnemyWiki> {
     return Object.values<any>(info?.query?.pages ?? {})[0]?.imageinfo?.[0]?.url as string | undefined
   }
   const plain = e.name.replace(/^'|'$/g, '')
+  const generic = GENERIC_PORTRAIT[e.id]
   try {
     const found = await wikiApi({ action: 'query', list: 'search', srsearch: `insource:"${e.id}"`, srlimit: '5', srnamespace: '0' })
     for (const r of found?.query?.search ?? []) {
@@ -905,6 +912,11 @@ async function enemyWiki(e: Enemy): Promise<EnemyWiki> {
           file = pick.file
           value.character = cb.title.replace(/\/Story$/, '')
         }
+      }
+      if (!file && generic) {
+        file = generic[0]
+        value.character = generic[1]
+        value.generic = true
       }
       if (file) value.portrait = await fileUrl(file.trim())
       if (!value.portrait) value.character = undefined
@@ -941,7 +953,9 @@ async function enemyView(e: Enemy): Promise<{ embeds: EmbedBuilder[]; components
   if (wk.enemyPage) em.setURL(wikiUrl(wk.enemyPage))
   if (wk.portrait) {
     em.setImage(wk.portrait)
-    em.setFooter({ text: `${FOOTER} · Enemy handbook, EN game data · Portrait from the Arknights wiki` })
+    em.setFooter({
+      text: `${FOOTER} · Enemy handbook, EN game data · ${wk.generic ? `Generic ${wk.character} story art from the Arknights wiki` : 'Portrait from the Arknights wiki'}`,
+    })
   }
   const vars = enemyVariants(e)
   if (vars.length > 1) {
@@ -968,7 +982,13 @@ async function enemyView(e: Enemy): Promise<{ embeds: EmbedBuilder[]; components
       .setLabel('Wiki')
       .setURL(wk.enemyPage ? wikiUrl(wk.enemyPage) : enemyWikiGuess(e)),
   )
-  if (wk.character) links.addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Character page').setURL(wikiUrl(wk.character)))
+  if (wk.character)
+    links.addComponents(
+      new ButtonBuilder()
+        .setStyle(ButtonStyle.Link)
+        .setLabel(wk.generic ? `${wk.character} page` : 'Character page')
+        .setURL(wikiUrl(wk.character)),
+    )
   rows.push(links)
   return { embeds: [em], components: rows }
 }
