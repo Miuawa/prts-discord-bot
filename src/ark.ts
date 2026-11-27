@@ -750,6 +750,10 @@ type Sheets = {
   farm: Map<string, { label: string; rows: [string, number, number][] }>
   teams: { title: string; facility: string; members: string; desc: string; effect: string; tokens: Set<string> }[]
   notes: Map<string, { facilities: string; text: string; partners: string }>
+  /** The sheet's write-ups for recently added or re-graded operators: normName -> grade change and reasoning. */
+  tierNotes: Map<string, { change: string; text: string; update: string }>
+  /** The sheet's revision log, newest first. */
+  revisions: { date: string; text: string }[]
 }
 let sheets: Sheets | null = null
 
@@ -810,7 +814,7 @@ function loadSheets(): Sheets | null {
     return sheets
   }
   if (sheets && sheets.mtime === mtime) return sheets
-  const s: Sheets = { mtime, tiers: [], tierOf: new Map(), classOf: new Map(), modules: new Map(), farm: new Map(), teams: [], notes: new Map() }
+  const s: Sheets = { mtime, tiers: [], tierOf: new Map(), classOf: new Map(), modules: new Map(), farm: new Map(), teams: [], notes: new Map(), tierNotes: new Map(), revisions: [] }
   try {
     const tl = readSheetTabs(files[0])
     let cur: { tier: string; names: string[] } | null = null
@@ -831,6 +835,25 @@ function loadSheets(): Sheets | null {
         const note = /\(([^)]*)\)\s*$/.exec(n)?.[1]
         const k = baseOpName(n)
         s.tierOf.set(k, [...(s.tierOf.get(k) ?? []), note ? `${cur.tier} (${note})` : cur.tier])
+      }
+    }
+    for (const [tab, lines] of tl) {
+      if (/^Newest Additions/.test(tab)) {
+        const update = (lines.find(l => /^Update\b/.test(l)) ?? '').trim()
+        for (const line of lines) {
+          const f = line.split(' | ').map(x => x.trim())
+          if (f.length < 5 || f[0] === 'Name' || !/★/.test(f[1])) continue
+          s.tierNotes.set(baseOpName(f[0].replace(/(\S)·\s*/g, '$1 ')), { change: f[3], text: f.slice(4).join(' | '), update })
+        }
+      }
+      if (tab === 'Revisions') {
+        let last = ''
+        for (const line of lines) {
+          const m = /^([A-Z][a-z]{2} \d{1,2}, \d{4}) \| (.*)$/.exec(line.trim())
+          if (m) last = m[1]
+          const text = m ? m[2] : line.trim()
+          if (text) s.revisions.push({ date: m ? m[1] : last, text })
+        }
       }
     }
     for (const [tab, lines] of tl) {
@@ -1177,6 +1200,14 @@ function classOfName(n: string, sh: Sheets): string | undefined {
   return sh.classOf.get(k)
 }
 
+/** Short forms the tier sheet uses in its revision log ("Texas2", "Kal2", "Ros IS") for an operator. */
+function tierAliases(o: Op | undefined, name: string): RegExp[] {
+  const out = [name]
+  const first = name.split(/[\s'’]/)[0]
+  if (o && / the |,|·/.test(name)) out.push(`${first}2`, `${first.slice(0, 4)}2`, `${first.slice(0, 3)}2`)
+  return out.map(a => new RegExp(`(^|[^\\w])${a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=$|[^\\w])`, 'i'))
+}
+
 async function cmdTier(i: ChatInputCommandInteraction, eph: boolean) {
   ensureData()
   const sh = loadSheets()
@@ -1184,31 +1215,51 @@ async function cmdTier(i: ChatInputCommandInteraction, eph: boolean) {
   const opQ = i.options.getString('operator')
   const want = i.options.getString('tier')
   const cls = i.options.getString('class')
-  const footer = `${FOOTER} · AK Tier List (fan-made, global, full investment, live from Google Sheets) · checked ${sheetDate('tier-list-aktierlist.txt')}`
+  const SHEET = 'https://docs.google.com/spreadsheets/d/1E7HmgKWiV8pKpJpvpVzziYxnaQTP01Vtw_PXEdL7XPA/edit'
+  const footer = `${FOOTER} · AK Tier List (fan-made, global, full investment) · checked ${sheetDate('tier-list-aktierlist.txt')}`
+  const link = new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Open the tier list').setURL(SHEET))
   if (opQ) {
-    ensureData()
     const o = findOps(opQ, 1)[0]
     const name = o?.name ?? opQ
     const t = sh.tierOf.get(normName(name))
-    const e = embed(`Tier record: ${name}`)
-      .setDescription(t ? `Rated **${t.join(', ')}**.` : 'This operator is not listed on the tier list.')
-      .setFooter({ text: footer })
-    return i.reply({ embeds: [e], flags: ephFlag(eph) })
+    const e = embed(name).setURL(SHEET).setFooter({ text: footer })
+    if (o) e.setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${o.id}.png`)
+    e.setDescription([o ? `${'★'.repeat(o.rarity)} · ${o.cls} · ${o.branch}` : '', t ? `Tier: **${t.join(', ')}**` : 'Not listed on the tier list.'].filter(Boolean).join('\n'))
+    const note = sh.tierNotes.get(normName(name))
+    if (note) e.addFields({ name: `Assessment · ${note.change}`, value: clip(note.text, 1000) })
+    const pats = tierAliases(o, name)
+    const revs = sh.revisions.filter(r => pats.some(p => p.test(r.text))).slice(0, 3)
+    // Only the sentences of each revision that mention this operator.
+    const about = (t: string) =>
+      t
+        .split(/(?<=\.)\s+/)
+        .filter(x => pats.some(p => p.test(x)))
+        .join(' ') || t
+    if (revs.length) e.addFields({ name: 'Rating history', value: clip(revs.map(r => `**${r.date || 'Earlier'}** · ${clip(about(r.text), 280)}`).join('\n'), 1024) })
+    if (!note && !revs.length && t) e.addFields({ name: 'Assessment', value: 'The sheet has no written reasoning for this operator yet. Its grade reflects full investment on the global server.' })
+    return i.reply({ embeds: [e], components: [link], flags: ephFlag(eph) })
   }
-  const order = sh.tiers.map(t => t.tier)
-  const list = sh.tiers.filter(t => (want ? t.tier === want : order.indexOf(t.tier) <= order.indexOf('A')))
-  const e = embed(`Operator tier list${want ? `: ${want}` : ''}${cls ? ` · ${cls}` : ''}`)
-    .setDescription('[Open the full sheet](https://docs.google.com/spreadsheets/d/1E7HmgKWiV8pKpJpvpVzziYxnaQTP01Vtw_PXEdL7XPA/edit)')
-    .setFooter({ text: footer })
-  for (const t of list) {
-    let names = t.names
-    if (cls) names = names.filter(n => classOfName(n, sh) === cls)
-    if (!names.length) continue
-    e.addFields({ name: t.tier, value: clip(names.join(', '), 1024) })
-    if ((e.data.fields?.length ?? 0) >= 24) break
+  // One page per tier, names grouped by class, so each grade reads on its own.
+  const CLASSES = ['Vanguard', 'Guard', 'Defender', 'Sniper', 'Caster', 'Medic', 'Supporter', 'Specialist']
+  const tiers = sh.tiers.filter(t => !want || t.tier === want)
+  const pages: EmbedBuilder[] = []
+  for (const t of tiers) {
+    const by = new Map<string, string[]>()
+    for (const n of t.names) {
+      const c = classOfName(n, sh) ?? 'Other'
+      if (cls && c !== cls) continue
+      by.set(c, [...(by.get(c) ?? []), n])
+    }
+    if (!by.size) continue
+    const e = embed(`Tier ${t.tier}${cls ? ` · ${cls}s` : ''}`)
+      .setURL(SHEET)
+      .setDescription(`${[...by.values()].reduce((n, l) => n + l.length, 0)} operators. Use \`/tier operator:<name>\` for one operator's assessment.`)
+    for (const c of [...CLASSES, 'Other']) if (by.get(c)?.length) e.addFields({ name: `${c}s`, value: clip(by.get(c)!.join(', '), 1024), inline: false })
+    pages.push(e)
   }
-  if (!e.data.fields?.length) e.setDescription('No operators match that filter.')
-  return i.reply({ embeds: [e], flags: ephFlag(eph) })
+  if (!pages.length) return i.reply({ embeds: [embed('Tier list').setDescription('No operators match that filter.').setFooter({ text: footer })], flags: ephFlag(eph) })
+  pages.forEach((p, k) => p.setFooter({ text: `${footer}${pages.length > 1 ? ` · page ${k + 1} of ${pages.length}` : ''}` }))
+  return i.reply({ ...paged(pages, [link]), flags: ephFlag(eph) })
 }
 
 // ───────────────────────── /module ─────────────────────────

@@ -595,8 +595,22 @@ async function cmdEvents(i: ChatInputCommandInteraction, eph: boolean) {
             .filter(Boolean)
             .join(', ')
         const game = b.up6?.length || b.up5?.length ? `Rate-up: ${names(b.up6)}${b.up5?.length ? ` · 5★: ${names(b.up5)}` : ''}` : null
-        const text = /^(CLASSIC|CLASSIC_DOUBLE)$/.test(b.type) && game ? game : (ups.get(b.id) ?? game)
-        return text ? `\n↳ ${clip(text.replace(/\n/g, ' · '), 260)}` : ''
+        let text = /^(CLASSIC|CLASSIC_DOUBLE)$/.test(b.type) && game ? game : (ups.get(b.id) ?? game)
+        // The wiki lists 6★ and 5★ rate-ups together; split them by rarity, and add the game data's 5★ when missing.
+        if (text) {
+          const rarityOf = new Map(Object.values(p.chars).map(c => [normName(c.name), c.rarity]))
+          text = text.replace(/(Rate-up|Secondary): ([^\n·]+)/g, (all, label: string, list: string) => {
+            const ns = list
+              .split(',')
+              .map(x => x.trim())
+              .filter(Boolean)
+            const six = ns.filter(n => rarityOf.get(normName(n)) !== 5)
+            const five = ns.filter(n => rarityOf.get(normName(n)) === 5)
+            return five.length && six.length ? `${label}: ${six.join(', ')} · 5★: ${five.join(', ')}` : five.length ? `${label} 5★: ${five.join(', ')}` : all
+          })
+          if (!/5★/.test(text) && b.up5?.length) text += ` · 5★: ${names(b.up5)}`
+        }
+        return text ? `\n↳ ${clip(text.replace(/\n/g, ' · '), 300)}` : ''
       })()
     e.addFields(
       field(
