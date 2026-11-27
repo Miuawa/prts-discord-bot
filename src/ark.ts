@@ -1658,14 +1658,41 @@ async function cmdStory(i: ChatInputCommandInteraction, eph: boolean) {
 
 // ───────────────────────── /base ─────────────────────────
 
+// The RIIC guide's shorthand, spelled out so the effects read in plain words.
+const RIIC_WORDS: [RegExp, string][] = [
+  [/\bMD (CC|TPs?|PPs?|RR|HR|Facs?)\b/g, 'morale drain per hour ($1)'],
+  [/\bMD\b/g, 'morale drain'],
+  [/\bCC\b/g, 'Control Center'],
+  [/\bTPs?\b/g, 'Trading Post'],
+  [/\bPPs?\b/g, 'Power Plant'],
+  [/\bRR\b/g, 'Reception Room'],
+  [/\bHR\b/g, 'Office'],
+  [/\bFacs?\b/g, 'Factory'],
+  [/\bDORMs?\b/gi, 'Dormitory'],
+  [/\bprod\b/gi, 'productivity'],
+  [/\b(\d)(\d)(\d) setup\b/g, '$1-$2-$3 base layout'],
+  [/\b2XX setup\b/g, '2-x-x base layout'],
+]
+const riic = (t: string) => RIIC_WORDS.reduce((x, [re, w]) => x.replace(re, w), t ?? '')
+/** Member names of a team, each with their operator portrait link when known. */
+function teamMembers(t: { members: string }): { names: string[]; first?: Op } {
+  const names = t.members
+    .split(/\s*(?:,|\+|\/|\band\b)\s*/)
+    .map(x => x.trim())
+    .filter(x => x && !/^\d|setup|lv\d|all /i.test(x))
+  const first = names.map(n => findOps(n, 1)[0]).find(Boolean)
+  return { names, first }
+}
+
 function baseOpEmbed(o: Op): EmbedBuilder {
   const sh = loadSheets()
   const footer = `${FOOTER} · RIIC base skill guide (fan-made, live from Google Sheets) · checked ${sheetDate('riic-base-skills.txt')}`
   const e = embed(`Base skills: ${o.name}`).setURL(RIIC_URL).setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${o.id}.png`).setFooter({ text: footer })
-  for (const b of (o.base ?? []).slice(0, 6)) e.addFields({ name: `${b.unlock} · ${b.room} · ${b.name}`, value: clip(b.desc, 1024) })
-  if (!o.base?.length) e.setDescription('No base skills found in game data.')
+  const rooms = [...new Set((o.base ?? []).map(b => b.room))]
+  e.setDescription(o.base?.length ? `${'★'.repeat(o.rarity)} · ${o.cls}\nWorks best in: **${rooms.join(', ')}**` : 'No base skills found in game data.')
+  for (const b of (o.base ?? []).slice(0, 6)) e.addFields({ name: `${b.name} · ${b.room} · unlocks at ${b.unlock.replace(/^E(\d)/, 'Elite $1')}`, value: clip(b.desc, 1024) })
   const note = sh?.notes.get(normName(o.name))
-  if (note) e.addFields({ name: `Guide notes (${note.facilities})`, value: clip(note.text.replace(/ - /g, '\n- '), 1024) })
+  if (note) e.addFields({ name: `Guide notes (${riic(note.facilities)})`, value: clip(riic(note.text).replace(/ - /g, '\n- '), 1024) })
   const key = normName(o.name)
   const teams = (sh?.teams ?? []).filter(t => t.tokens.has(key))
   if (teams.length) e.addFields({ name: 'Appears in team combos', value: clip(teams.map(t => `**${t.title}** (${t.facility})`).join('\n'), 1024) })
@@ -1689,9 +1716,15 @@ async function cmdBase(i: ChatInputCommandInteraction, eph: boolean) {
     const n = normName(teamQ)
     const t = sh?.teams.find(x => normName(x.title) === n) ?? sh?.teams.find(x => normName(x.title).includes(n))
     if (!t) return i.reply({ content: `[PRTS] No team combo matches "${clip(teamQ, 60)}". Use the suggestions or /base facility:.`, flags: MessageFlags.Ephemeral })
-    const e = embed(t.title).setURL(RIIC_URL).setDescription(clip(t.desc, 2000)).setFooter({ text: footer })
-    e.addFields({ name: 'Facility and effect', value: clip(`**${t.facility}**${t.effect ? ` · ${t.effect}` : ''}`, 1024) })
-    if (t.members) e.addFields({ name: 'Core members', value: clip(t.members, 1024) })
+    const m = teamMembers(t)
+    const e = embed(t.title)
+      .setURL(RIIC_URL)
+      .setDescription(`**${t.facility}**${t.effect ? ` · ${riic(t.effect)}` : ''}`)
+      .setFooter({ text: footer })
+    if (m.first) e.setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${m.first.id}.png`)
+    if (t.members) e.addFields({ name: 'Core members', value: clip(riic(t.members), 1024) })
+    if (t.desc) e.addFields({ name: 'How it works', value: clip(riic(t.desc), 1024) })
+    e.addFields({ name: 'More', value: "Use `/base operator:<name>` for one member's base skills." })
     return i.reply({ embeds: [e], flags: ephFlag(eph) })
   }
   const list = (sh?.teams ?? []).filter(t => !fac || t.facility === fac)
@@ -1704,7 +1737,9 @@ async function cmdBase(i: ChatInputCommandInteraction, eph: boolean) {
     e.setDescription('Use `/base operator:` for one operator, `/base team:` for details, or `/base facility:` to filter.')
     for (const [f, ts] of by) e.addFields({ name: f, value: clip(ts.join(', '), 1024) })
   } else {
-    e.setDescription(clip(list.map(t => `**${t.title}**${t.effect ? ` · ${clip(t.effect, 80)}` : ''}${t.members ? `\n${clip(t.members, 150)}` : ''}`).join('\n') || 'No teams listed.', 4000))
+    e.setDescription('Use `/base team:<name>` for how a team works.')
+    for (const t of list.slice(0, 24))
+      e.addFields({ name: t.title, value: clip([t.effect ? riic(t.effect) : '', t.members ? `Members: ${riic(t.members)}` : ''].filter(Boolean).join('\n') || '—', 1024) })
   }
   return i.reply({ embeds: [e], flags: ephFlag(eph) })
 }
