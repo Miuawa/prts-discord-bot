@@ -44,7 +44,7 @@ services:
     ports:
       - "127.0.0.1:${PRTS_BRIDGE_PORT:-47823}:47823"
     # A local model on the host (llama.cpp, llama-swap, Ollama): point
-    # PRTS_LOCAL_URL / RP_BASE_URL at http://host.docker.internal:<port>/v1, and
+    # PRTS_BASE_URL / RP_BASE_URL at http://host.docker.internal:<port>/v1, and
     # make the server listen on the Docker bridge address (172.17.0.1), not only
     # on 127.0.0.1. See docs/docker.md.
     extra_hosts:

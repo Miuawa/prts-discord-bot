@@ -56,7 +56,7 @@ Settings you can put in the shell or in `.env` for compose itself: `PRTS_UID` / 
 Point the bot at the host instead of `127.0.0.1`, in `.env` or `compose.override.yaml`:
 
 ```ini
-PRTS_LOCAL_URL=http://host.docker.internal:8081/v1
+PRTS_BASE_URL=http://host.docker.internal:8081/v1
 ```
 
 The model server must listen where containers can reach it: on the Docker bridge address
