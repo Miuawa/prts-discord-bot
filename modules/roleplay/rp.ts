@@ -7,6 +7,7 @@
 // - /rp act|ooc|join|recap go to the AI. /rp setchannel, /rp removechannel,
 //   /rp channels, /rp pause, /rp resume, /rp players, /rp status, /rp afk and
 //   /rp reminders are answered by the module itself.
+import { COLOR, FOOTER } from '../../src/theme.ts'
 import { EmbedBuilder, MessageFlags, type ChatInputCommandInteraction, type Client } from 'discord.js'
 import { readFileSync, writeFileSync, renameSync, existsSync, statSync, mkdirSync } from 'fs'
 import { join } from 'path'
@@ -22,8 +23,6 @@ const OWNERS = (process.env.RP_OWNER_IDS ?? '')
   .split(',')
   .map(s => s.trim())
   .filter(Boolean)
-const COLOR = { info: 0xe0383e, ok: 0xe0383e, warn: 0xf2a33a, dim: 0x5c6670 }
-const FOOTER = 'Primitive Rhodes Island Terminal Service'
 
 type RpChannel = { name: string; guildId: string | null; guildName: string | null; setBy: string; setAt: string; paused?: boolean; nudgeMin?: number }
 type RpStore = { channels: Record<string, RpChannel> }

@@ -44,7 +44,8 @@ import {
 } from 'discord.js'
 import { randomBytes } from 'crypto'
 import { MUSIC_COMMAND, handleMusic, handleMusicButton, handleMusicSelect, handleMusicAutocomplete } from './music.ts'
-import { FRAME_CHARS, SECTION, brand, frameChunks } from './theme.ts'
+import { COLOR, FRAME_CHARS, SECTION, brand, frameChunks } from './theme.ts'
+import { ephFlag } from './common.ts'
 import { visit } from './visits.ts'
 import { handlePageButton } from './pages.ts'
 import { ARK_COMMANDS, ARK_COMMAND_NAMES, handleArk, handleArkAutocomplete, handleArkButton, handleArkSelect, registerHelp, startStoryRefresh } from './ark.ts'
@@ -134,6 +135,9 @@ const client = new Client({
   intents: [GatewayIntentBits.DirectMessages, GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildVoiceStates],
   // DMs arrive as partial channels — messageCreate never fires without this.
   partials: [Partials.Channel],
+  // Never let a reply ping @everyone, @here or a role, whatever text it echoes (AI answers, reminders, roll
+  // reasons). Users can still be mentioned; a send that needs more must say so itself.
+  allowedMentions: { parse: ['users'], repliedUser: false },
 })
 
 type PendingEntry = {
@@ -298,7 +302,6 @@ type SlashChat = {
   api?: boolean // answered by an API model rather than the Claude Code narrator
   framed?: boolean // a PRTS-persona chat (/prts, "Ask PRTS"): replies get the terminal header and footer
 }
-const ephFlag = (on: boolean): MessageFlags.Ephemeral | undefined => (on ? MessageFlags.Ephemeral : undefined)
 
 const SLASH_PREFIX = 'slash:'
 const SLASH_TTL_MS = 15 * 60 * 1000
@@ -1372,7 +1375,7 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
   }
   const ok = online || CORE_AI.backend !== 'claude-code'
   const e = new EmbedBuilder()
-    .setColor(ok ? 0xe0383e : 0xf2a33a)
+    .setColor(ok ? COLOR.info : COLOR.warn)
     .setTitle('System status report')
     .setDescription(
       ok

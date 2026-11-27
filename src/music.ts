@@ -4,6 +4,7 @@
 // Spotify audio itself is DRM-protected.
 // Handled directly by the bot (no Claude round trip), so it answers instantly.
 // UI: a PRTS-styled "now playing" panel with control buttons, refreshed live.
+import { COLOR as THEME } from './theme.ts'
 import {
   joinVoiceChannel,
   getVoiceConnection,
@@ -52,7 +53,7 @@ const HISTORY_FILE = join(CACHE_DIR, 'music-history.json')
 const PANEL_REFRESH_MS = 15_000
 
 // PRTS look: dark terminal panel, cyan accent, amber for paused, grey for idle.
-const COLOR = { playing: 0xe0383e, paused: 0xf2a33a, idle: 0x5c6670 }
+const COLOR = { playing: THEME.info, paused: THEME.warn, idle: THEME.dim }
 const AUTHOR = 'PRTS · Audio Playback Module'
 const FOOTER = 'Primitive Rhodes Island Terminal Service · Real-time logging activated'
 
@@ -389,10 +390,25 @@ async function spotifyTracks(url: string): Promise<Track[]> {
   return found.map(t => ({ ...t, title: data.title!, url, thumb: data.thumbnail_url ?? t.thumb }))
 }
 
+/** Links must point at the public internet: the bot runs on a home PC, so links to it or the local network are refused. */
+export function isPublicHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  if (!h || h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.lan') || h.endsWith('.internal') || h.endsWith('.home')) return false
+  if (/^\d+$/.test(h)) return false // a bare number is an IPv4 address in disguise
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h)
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])]
+    return !(a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a >= 224)
+  }
+  if (h.includes(':')) return !(h === '::' || h === '::1' || /^f[cd]/.test(h) || /^fe[89ab]/.test(h) || h.startsWith('::ffff:'))
+  return true
+}
+
 async function resolveQuery(query: string): Promise<Track[]> {
   const q = query.trim()
   if (/^https?:\/\//i.test(q)) {
     const u = new URL(q)
+    if (!isPublicHost(u.hostname)) throw new Error('links to local or private network addresses are not allowed')
     if (/(^|\.)spotify\.com$/i.test(u.hostname)) return spotifyTracks(q)
     if (MEDIA_EXT.has(extname(u.pathname).toLowerCase()) && !/youtu/i.test(u.hostname)) return [{ title: decodeURIComponent(basename(u.pathname)), kind: 'file', ref: q, url: q, source: 'Link' }]
     return ytdlpTracks(q)

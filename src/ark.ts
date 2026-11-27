@@ -16,6 +16,7 @@
 //   can rebuild it daily (see startStoryRefresh); the file is re-read on change.
 // - arknights.wiki.gg MediaWiki API for /wiki and NPC fallbacks.
 // - Images: myrtle.moe CDN (operator art), yuanyan3060 GitHub mirror (avatars).
+import { GAMEDATA, WIKI, UA, avatarUrl, clip, ephFlag, enemyIconUrl, wikiUrl } from './common.ts'
 import {
   EmbedBuilder,
   MessageFlags,
@@ -41,11 +42,8 @@ import { announce } from './announce.ts'
 import { type ModuleEffect, fillTemplate, parseModule, statLine, gradeWord, recLevel } from './equip.ts'
 const CACHE_FILE = join(CACHE_DIR, 'arkdata.json')
 const CACHE_MAX_AGE_MS = 3 * 24 * 3600 * 1000
-const GAMEDATA = 'https://raw.githubusercontent.com/ArknightsAssets/ArknightsGamedata/master/en/gamedata/excel/'
 const TIMO = 'https://arknights.timo.beer'
-const WIKI = 'https://arknights.wiki.gg'
 const MYRTLE = 'https://myrtle.moe'
-const UA = process.env.PRTS_USER_AGENT ?? 'PRTS-Discord-bot/1.0 (unofficial Arknights fan bot)'
 
 const log = (s: string) => process.stderr.write(`prts ark: ${s}\n`)
 
@@ -966,7 +964,6 @@ function sheetDate(file: string): string {
 // ───────────────────────── helpers ─────────────────────────
 
 const stars = (n: number) => '★'.repeat(n)
-const wikiUrl = (title: string) => `${WIKI}/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}`
 const randInt = (n: number) => {
   const buf = new Uint32Array(1)
   const lim = Math.floor(0x100000000 / n) * n
@@ -974,8 +971,6 @@ const randInt = (n: number) => {
   while (buf[0] >= lim)
   return buf[0] % n
 }
-const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s)
-const ephFlag = (on: boolean): MessageFlags.Ephemeral | undefined => (on ? MessageFlags.Ephemeral : undefined)
 
 function embed(title?: string): EmbedBuilder {
   const e = new EmbedBuilder().setColor(COLOR.info).setFooter({ text: FOOTER })
@@ -1140,7 +1135,7 @@ function operatorCard(o: Op): { embeds: EmbedBuilder[]; components: ActionRowBui
   const e = embed(o.name)
     .setURL(wikiUrl(o.name))
     .setDescription([stars(o.rarity), o.usage ? `*${clip(o.usage, 300)}*` : '', o.desc ? `> ${clip(o.desc, 200)}` : ''].filter(Boolean).join('\n'))
-    .setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${o.id}.png`)
+    .setThumbnail(avatarUrl(o.id))
     .setImage(`https://assets.eltik.net/myrtle/en/textures/chararts/${o.id}/${o.id}_${o.rarity >= 4 ? 2 : 1}.png`)
   const tier = tierText(o, sh)
   const alts = (o.alts ?? []).map(id => opIndex()?.byId.get(id)).filter((x): x is Op => !!x)
@@ -1259,7 +1254,7 @@ async function cmdTier(i: ChatInputCommandInteraction, eph: boolean) {
     const name = o?.name ?? opQ
     const t = sh.tierOf.get(normName(name))
     const e = embed(name).setURL(SHEET).setFooter({ text: footer })
-    if (o) e.setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${o.id}.png`)
+    if (o) e.setThumbnail(avatarUrl(o.id))
     e.setDescription([o ? `${'★'.repeat(o.rarity)} · ${o.cls} · ${o.branch}` : '', t ? `Tier: **${t.join(', ')}**` : 'Not listed on the tier list.'].filter(Boolean).join('\n'))
     const note = sh.tierNotes.get(normName(name))
     if (note) e.addFields({ name: `Assessment · ${note.change}`, value: clip(note.text, 1000) })
@@ -1309,7 +1304,7 @@ function moduleView(o: Op, idx: number, tab: string): { embeds: EmbedBuilder[]; 
   const r = m ? ratingRow(m, rated) : undefined
   const e = embed(m ? `${m.type} · ${m.name}` : `Modules: ${o.name}`)
     .setURL(wikiUrl(o.name))
-    .setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${o.id}.png`)
+    .setThumbnail(avatarUrl(o.id))
   if (!m) return { embeds: [e.setDescription('No modules on record.')], components: [] }
   e.setDescription(`**${o.name}** · module ${mods.indexOf(m) + 1} of ${mods.length}${m.form ? ` · ${m.form}` : ''} · unlocks at ${m.unlock ?? 'Elite 2'}`)
   if (tab === 'review' && r) {
@@ -1765,7 +1760,7 @@ function teamMembers(t: { members: string }): { names: string[]; first?: Op } {
 function baseOpEmbed(o: Op): EmbedBuilder {
   const sh = loadSheets()
   const footer = `${FOOTER} · RIIC base skill guide (fan-made, live from Google Sheets) · checked ${sheetDate('riic-base-skills.txt')}`
-  const e = embed(`Base skills: ${o.name}`).setURL(RIIC_URL).setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${o.id}.png`).setFooter({ text: footer })
+  const e = embed(`Base skills: ${o.name}`).setURL(RIIC_URL).setThumbnail(avatarUrl(o.id)).setFooter({ text: footer })
   const rooms = [...new Set((o.base ?? []).map(b => b.room))]
   e.setDescription(o.base?.length ? `${'★'.repeat(o.rarity)} · ${o.cls}\nWorks best in: **${rooms.join(', ')}**` : 'No base skills found in game data.')
   for (const b of (o.base ?? []).slice(0, 6)) e.addFields({ name: `${b.name} · ${b.room} · unlocks at ${b.unlock.replace(/^E(\d)/, 'Elite $1')}`, value: clip(b.desc, 1024) })
@@ -1799,7 +1794,7 @@ async function cmdBase(i: ChatInputCommandInteraction, eph: boolean) {
       .setURL(RIIC_URL)
       .setDescription(`**${t.facility}**${t.effect ? ` · ${riic(t.effect)}` : ''}`)
       .setFooter({ text: footer })
-    if (m.first) e.setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${m.first.id}.png`)
+    if (m.first) e.setThumbnail(avatarUrl(m.first.id))
     if (t.members) e.addFields({ name: 'Core members', value: clip(riic(t.members), 1024) })
     if (t.desc) e.addFields({ name: 'How it works', value: clip(riic(t.desc), 1024) })
     e.addFields({ name: 'More', value: "Use `/base operator:<name>` for one member's base skills." })
@@ -2278,7 +2273,7 @@ async function cmdMyrtle(i: ChatInputCommandInteraction, eph: boolean) {
       if (!r) return i.editReply({ embeds: [e.setDescription(`**${o.name}** is not in ${tag(u)}'s roster.${others}`)] })
       e.setTitle(`${tag(u)} · ${o.name}`)
         .setDescription(opLine(r) + others)
-        .setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${o.id}.png`)
+        .setThumbnail(avatarUrl(o.id))
         .addFields({
           name: 'Build',
           value: [
@@ -2478,7 +2473,7 @@ function outfitEmbed(op: Op, o: Outfit): EmbedBuilder {
     .setURL(`${MYRTLE}/operators/${op.id}`)
     .setDescription([o.line && `*${o.line}*`].filter(Boolean).join('\n') || null)
     .setImage(outfitArt(op.id, o))
-    .setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${op.id}.png`)
+    .setThumbnail(avatarUrl(op.id))
   e.addFields({
     name: 'Details',
     value: [

@@ -7,6 +7,7 @@
 // Game data comes from the same GitHub mirror as ark.ts. It is large (the stage
 // and activity tables are 20 MB each), so it is trimmed once a day into
 // cache/arkplus.json.
+import { GAMEDATA, WIKI, UA, avatarUrl, clip, ephFlag, enemyIconUrl, wikiUrl } from './common.ts'
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -29,9 +30,6 @@ import { CACHE_DIR } from './paths.ts'
 import { announce, announceChannelFor, setAnnounceChannel } from './announce.ts'
 const CACHE_FILE = join(CACHE_DIR, 'arkplus.json')
 const REMIND_FILE = join(CACHE_DIR, 'reminders.json')
-const GAMEDATA = 'https://raw.githubusercontent.com/ArknightsAssets/ArknightsGamedata/master/en/gamedata/excel/'
-const WIKI = 'https://arknights.wiki.gg'
-const UA = 'PRTS-Discord-bot/1.0 (private Arknights fan bot)'
 const DATA_VERSION = 6
 const MAX_AGE_MS = 24 * 3600 * 1000
 const log = (s: string) => process.stderr.write(`prts arkplus: ${s}\n`)
@@ -377,15 +375,12 @@ setTimeout(ensurePlus, 20_000).unref()
 setInterval(ensurePlus, 6 * 3600 * 1000).unref()
 
 // ───────────────────────── helpers ─────────────────────────
-const ephFlag = (on: boolean): MessageFlags.Ephemeral | undefined => (on ? MessageFlags.Ephemeral : undefined)
-const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s)
 const embed = (title?: string) => {
   const e = new EmbedBuilder().setColor(COLOR.info).setFooter({ text: FOOTER })
   if (title) e.setTitle(title)
   return e
 }
 const itemName = (p: Plus, id: string) => p.items[id]?.[0] ?? (id === '4001' ? 'LMD' : id)
-const wikiUrl = (t: string) => `${WIKI}/wiki/${encodeURIComponent(t.replace(/ /g, '_'))}`
 
 /** Returns the data, or replies "records loading" and returns null. */
 async function need(i: ChatInputCommandInteraction, eph: boolean): Promise<Plus | null> {
@@ -803,7 +798,7 @@ function enemyEmbed(e: Enemy): EmbedBuilder {
   const kind = [e.races.join(', '), e.attack, e.flying ? 'flying' : '', e.damage.length ? `deals ${e.damage.join(' and ')} damage` : ''].filter(Boolean).join(' · ')
   const em = embed(e.name)
     .setURL(enemyWikiGuess(e))
-    .setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/enemy/${e.id}.png`)
+    .setThumbnail(enemyIconUrl(e.id))
     .setDescription([`**${e.level}**${e.index ? ` · \`${e.index}\`` : ''}${kind ? ` · ${kind}` : ''}`, e.desc ? `\n*${clip(e.desc, 600)}*` : ''].filter(Boolean).join('\n'))
   if (e.note && e.note !== e.desc) em.addFields({ name: 'In battle', value: clip(e.note, 500) })
   if (e.stats) {
@@ -1135,7 +1130,7 @@ function compareView(p: Plus, ia: string, ib: string, view: string): { embeds: E
     const x = view === 'a' ? a : b
     const sum = operatorSummary(x.c.name)
     e = embed(x.c.name)
-      .setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${x.id}.png`)
+      .setThumbnail(avatarUrl(x.id))
       .setDescription(`${who(x)}\n**Tier:** ${sum.tier ?? 'not listed'} *(AK Tier List)*`)
       .addFields({
         name: 'Modules',
@@ -1251,7 +1246,7 @@ function materialsView(p: Plus, id: string, goal: string): { embeds: EmbedBuilde
     parts.push(`modules to stage 3 (${c.modules.map(m => m.name).join(', ')})`)
   }
   const label = GOALS.find(g => g[0] === goal)?.[1] ?? goal
-  const e = embed(`${c.name} · ${label}`).setURL(wikiUrl(c.name)).setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${id}.png`)
+  const e = embed(`${c.name} · ${label}`).setURL(wikiUrl(c.name)).setThumbnail(avatarUrl(id))
   const lmd = total.get('4001') ?? 0
   total.delete('4001')
   if (!total.size && !lmd) {
@@ -1556,7 +1551,7 @@ export function startAnnouncements(client: Client): void {
     await announce(
       client,
       new EmbedBuilder()
-        .setColor(0xe0383e)
+        .setColor(COLOR.info)
         .setTitle('Operations bulletin')
         .setDescription(clip(posts.join('\n'), 4000))
         .setFooter({ text: 'PRTS · /events schedule for the full list' }),

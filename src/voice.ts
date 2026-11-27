@@ -3,6 +3,8 @@
 // story reader (arknights.timo.beer), the same source the other lookups use.
 // If the music player is using the voice channel, this asks to wait instead of
 // interrupting it.
+import { COLOR, FOOTER } from './theme.ts'
+import { clip } from './common.ts'
 import {
   joinVoiceChannel,
   getVoiceConnection,
@@ -18,8 +20,6 @@ import { EmbedBuilder, MessageFlags, type AutocompleteInteraction, type ChatInpu
 import { findOps, normName } from './ark.ts'
 
 const SITE = 'https://arknights.timo.beer'
-const COLOR = { info: 0xe0383e, dim: 0x5c6670 }
-const FOOTER = 'Primitive Rhodes Island Terminal Service'
 const DUB_DIR: Record<string, string> = { jp: 'voice', cn: 'voice_cn', en: 'voice_en', kr: 'voice_kr' }
 const DUB_NAME: Record<string, string> = { jp: 'Japanese', cn: 'Chinese', en: 'English', kr: 'Korean' }
 const IDLE_LEAVE_MS = 20_000
@@ -64,7 +64,6 @@ const clean = (s: string) =>
     .replace(/\{@[a-z_]+\}/gi, '')
     .replace(/<\/?[a-z][^>]*>/gi, '')
     .trim()
-const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s)
 const clipUrl = (charId: string, id: string, dub: string) => `${SITE}/game/en/audio/sound_beta_2/${DUB_DIR[dub]}/${encodeURIComponent(charId.toLowerCase())}/${id.toLowerCase()}.mp3`
 
 // ---------- playback ----------
