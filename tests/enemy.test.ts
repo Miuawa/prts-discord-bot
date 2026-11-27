@@ -62,11 +62,17 @@ test('parses the handbook and battle stats', () => {
 test('reads NPC portraits from the wiki infobox', async () => {
   const { parseInfoboxImages } = await import('../src/arkplus.ts')
   const npc = '{{NPC tab}}\n{{Character infobox\n|name = Jesselton Williams\n|image = \nJesselton Williams jailer.png:Jailer;\nJesselton Williams killer.png:Killer;\n|othername = X\n}}'
-  expect(parseInfoboxImages(npc)).toEqual([
-    { file: 'Jesselton Williams jailer.png', label: 'Jailer' },
-    { file: 'Jesselton Williams killer.png', label: 'Killer' },
-  ])
+  expect(parseInfoboxImages(npc)).toEqual([{ file: 'Jesselton Williams jailer.png', label: 'Jailer' }])
   const op = '{{Operator infobox\n|name = Talulah\n|image = \nTalulah.png:Base;\nTalulah Elite 2.png:Elite 2\n|cnname = x}}'
   expect(parseInfoboxImages(op)).toEqual([{ file: 'Talulah.png', label: 'Operator art' }])
   expect(parseInfoboxImages('no infobox')).toEqual([])
+  expect(parseInfoboxImages("{{Faction infobox\n|name = Emperor's Blades\n|image = Emperor's Blade.png\n|othername = x")).toEqual([{ file: "Emperor's Blade.png", label: 'Portrait' }])
+})
+
+test('groups enemy variants by base name', async () => {
+  const { enemyBaseName } = await import('../src/arkplus.ts')
+  expect(enemyBaseName("'Emperor's Blade', Pursuer")).toBe("Emperor's Blade")
+  expect(enemyBaseName("'Emperor's Blade'")).toBe("Emperor's Blade")
+  expect(enemyBaseName('Originium Slug α')).toBe('Originium Slug')
+  expect(enemyBaseName('Talulah, the Fighter')).toBe('Talulah')
 })

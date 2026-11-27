@@ -159,7 +159,7 @@ registerHelp([
     short: "An enemy's stats, abilities and handbook entry",
     usage: '/enemy name:<enemy>',
     detail:
-      "Shows an enemy's handbook entry from the EN game data: class (Normal, Elite, Leader), type, attack and damage type, HP, ATK, DEF, RES, attack interval, move speed, range, weight, life points taken, immunities and abilities. If some stages use a stronger version, its changed stats are listed too. Story characters (Jesselton Williams, Yurodstvo, Patriot...) also show their portrait from the wiki, with buttons for their other looks. Start typing for suggestions.",
+      "Shows an enemy's handbook entry from the EN game data: class (Normal, Elite, Leader), type, attack and damage type, HP, ATK, DEF, RES, attack interval, move speed, range, weight, life points taken, immunities and abilities. If some stages use a stronger version, its changed stats are listed too. Story characters (Jesselton Williams, Yurodstvo, Patriot...) also show their portrait from the wiki, and enemies with several versions ('Emperor's Blade', Pursuer and Halberd Breaker) get buttons to switch between them. Start typing for suggestions.",
     examples: ['/enemy name: Patriot', '/enemy name: Originium Slug'],
   },
   {
@@ -776,9 +776,8 @@ type Portraits = { page: string; images: { label: string; url: string }[] }
 const portraitCache = new Map<string, { at: number; value: Portraits | null }>()
 
 export function parseInfoboxImages(wikitext: string): { file: string; label: string }[] {
-  const at = wikitext.search(/\{\{\s*(Character|Operator) infobox/i)
+  const at = wikitext.search(/\{\{\s*(Character|Operator|Faction) infobox/i)
   if (at < 0) return []
-  // An operator page (Crownslayer, Talulah) lists outfits too; only its first, base art fits an enemy entry.
   const operator = /^\{\{\s*Operator/i.test(wikitext.slice(at))
   const m = /\n\s*\|\s*image\s*=([\s\S]*?)(?=\n\s*\||\}\})/.exec(wikitext.slice(at))
   if (!m) return []
@@ -790,7 +789,7 @@ export function parseInfoboxImages(wikitext: string): { file: string; label: str
       const [file, label] = x.split(/:(?=[^:]*$)/)
       return { file: file.trim(), label: operator ? 'Operator art' : (label ?? '').trim() || 'Portrait' }
     })
-    .slice(0, operator ? 1 : 5)
+    .slice(0, 1) // later images are often other people or looks that differ from the enemy sprite
 }
 
 async function wikiApi(params: Record<string, string>): Promise<any> {
@@ -799,6 +798,20 @@ async function wikiApi(params: Record<string, string>): Promise<any> {
   const r = await fetch(u, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(4000) })
   if (!r.ok) throw new Error(`wiki ${r.status}`)
   return r.json()
+}
+
+/** "'Emperor's Blade', Pursuer" -> "Emperor's Blade"; "Originium Slug α" -> "Originium Slug". */
+export const enemyBaseName = (name: string) =>
+  name
+    .split(/',\s|,\s/)[0]
+    .replace(/^'|'$/g, '')
+    .replace(/\s+[αβγδεΩ]$/, '')
+    .trim()
+
+/** Other handbook entries of the same enemy (variants such as 'Emperor's Blade', Pursuer), current one included. */
+function enemyVariants(e: Enemy): Enemy[] {
+  const base = normName(enemyBaseName(e.name))
+  return Object.values(plus?.enemies ?? {}).filter(x => normName(enemyBaseName(x.name)) === base)
 }
 
 async function npcPortraits(name: string): Promise<Portraits | null> {
@@ -829,27 +842,32 @@ async function npcPortraits(name: string): Promise<Portraits | null> {
   return value
 }
 
-/** The /enemy reply; `pic` picks which NPC portrait to show (`arkp:enpic:<enemy id>:<n>`). */
-async function enemyView(e: Enemy, pic = 0): Promise<{ embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder>[] }> {
+/** The /enemy reply, with buttons for the enemy's other variants (`arkp:enemy:<enemy id>`). */
+async function enemyView(e: Enemy): Promise<{ embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder>[] }> {
   const em = enemyEmbed(e)
-  const pr = await npcPortraits(e.name)
+  const base = enemyBaseName(e.name)
+  const pr = (await npcPortraits(base)) ?? (base !== e.name ? await npcPortraits(e.name) : null)
   const rows: ActionRowBuilder<ButtonBuilder>[] = []
   if (pr) {
-    const k = Math.min(Math.max(pic, 0), pr.images.length - 1)
-    em.setImage(pr.images[k].url)
-    em.setFooter({ text: `${FOOTER} · Enemy handbook, EN game data · Portrait${pr.images.length > 1 ? `: ${pr.images[k].label}` : ''} from the Arknights wiki` })
-    if (pr.images.length > 1)
-      rows.push(
-        new ActionRowBuilder<ButtonBuilder>().addComponents(
-          pr.images.map((x, n) =>
-            new ButtonBuilder()
-              .setCustomId(`arkp:enpic:${e.id}:${n}`)
-              .setLabel(clip(x.label, 80))
-              .setStyle(n === k ? ButtonStyle.Primary : ButtonStyle.Secondary)
-              .setDisabled(n === k),
-          ),
-        ),
-      )
+    em.setImage(pr.images[0].url)
+    em.setFooter({ text: `${FOOTER} · Enemy handbook, EN game data · Portrait from the Arknights wiki` })
+  }
+  const vars = enemyVariants(e)
+  if (vars.length > 1) {
+    // Buttons hold up to five; list the rest so none is hidden.
+    if (vars.length > 5) em.addFields({ name: `Variants (${vars.length})`, value: clip(vars.map(v => (v.id === e.id ? `**${v.name}** (shown)` : v.name)).join('\n'), 1024) })
+    rows.push(
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        vars.slice(0, 5).map(v => {
+          const short = /',\s*(.+)$/.exec(v.name)?.[1] ?? v.name.replace(/^'|'$/g, '')
+          return new ButtonBuilder()
+            .setCustomId(`arkp:enemy:${v.id}`)
+            .setLabel(clip(short, 80))
+            .setStyle(v.id === e.id ? ButtonStyle.Primary : ButtonStyle.Secondary)
+            .setDisabled(v.id === e.id)
+        }),
+      ),
+    )
   }
   const links = new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Wiki').setURL(enemyWiki(e)))
   if (pr) links.addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Character page').setURL(wikiUrl(pr.page)))
@@ -1030,14 +1048,14 @@ async function cmdMaterials(i: ChatInputCommandInteraction, eph: boolean) {
 /** Buttons from /materials and the /operator card. A private reply is switched in place; a public one answers privately. */
 export async function handleArkPlusButton(i: ButtonInteraction): Promise<void> {
   ensurePlus()
-  const pic = /^arkp:enpic:([^:]+):(\d+)$/.exec(i.customId)
+  const pic = /^arkp:(?:enemy|enpic):([^:]+)/.exec(i.customId)
   if (pic) {
     const e = plus?.enemies?.[pic[1]]
     if (!e) {
       await i.reply({ content: '[PRTS] That record is not available right now. Please try again shortly. I apologize.', flags: MessageFlags.Ephemeral })
       return
     }
-    const view = stampEmbeds(await enemyView(e, Number(pic[2])), SECTION.enemy) as Awaited<ReturnType<typeof enemyView>>
+    const view = stampEmbeds(await enemyView(e), SECTION.enemy) as Awaited<ReturnType<typeof enemyView>>
     if (i.message?.flags?.has(MessageFlags.Ephemeral)) await i.update(view)
     else await i.reply({ ...view, flags: MessageFlags.Ephemeral })
     return
