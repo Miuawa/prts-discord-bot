@@ -1239,12 +1239,12 @@ function moduleView(o: Op, idx: number, tab: string): { embeds: EmbedBuilder[]; 
     ),
     new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
-        .setCustomId(`ark:modv:${o.id}:${at}:fx`)
+        .setCustomId(`ark:modv:${o.id}:${at}:fx:tab`)
         .setLabel('Effects')
         .setStyle(tab !== 'review' || !r ? ButtonStyle.Primary : ButtonStyle.Secondary)
         .setDisabled(tab !== 'review' || !r),
       new ButtonBuilder()
-        .setCustomId(`ark:modv:${o.id}:${at}:review`)
+        .setCustomId(`ark:modv:${o.id}:${at}:review:tab`)
         .setLabel('Community review')
         .setStyle(tab === 'review' && r ? ButtonStyle.Primary : ButtonStyle.Secondary)
         .setDisabled(!r || tab === 'review'),
@@ -1265,7 +1265,7 @@ export async function handleArkButton(i: ButtonInteraction): Promise<void> {
   const eph = MessageFlags.Ephemeral
   brand(i, { mod: SECTION.operator, modpc: SECTION.operator, modv: SECTION.operator, op: SECTION.operator, skin: SECTION.skin, base: SECTION.base }[m[1]])
   if (m[1] === 'mod' || m[1] === 'modpc' || m[1] === 'modv') {
-    const [, idx, tab] = /^[^:]+(?::(\d+):(\w+))?$/.exec(m[2].replace(/^[^:]+/, 'x')) ?? []
+    const [, idx, tab] = /^[^:]+(?::(\d+):(\w+))?(?::tab)?$/.exec(m[2].replace(/^[^:]+/, 'x')) ?? []
     const view = moduleView(o, Number(idx ?? 0), tab ?? (m[1] === 'modpc' ? 'review' : 'fx'))
     if (m[1] === 'modv' && i.message?.flags?.has(MessageFlags.Ephemeral)) await i.update(view)
     else await i.reply({ ...view, flags: eph })
