@@ -80,3 +80,17 @@ test('groups enemy variants by base name', async () => {
   expect(enemyBaseName('Originium Slug α')).toBe('Originium Slug')
   expect(enemyBaseName('Talulah, the Fighter')).toBe('Talulah')
 })
+
+test('finds the character behind an enemy page', async () => {
+  const { enemyCharacter, pickPortrait } = await import('../src/arkplus.ts')
+  expect(enemyCharacter('Talulah/Ally', '')).toEqual({ page: 'Talulah', hint: '' })
+  const lava = "{{Enemy infobox\n|name = Lava, Flame of Resistance\n|filename = enemy_8017_vcblva}}\n'''[[Lava the Purgatory|Lava]], Flame of Resistance''' is an [[elite enemy]]."
+  expect(enemyCharacter('Lava, Flame of Resistance', lava)).toEqual({ page: 'Lava the Purgatory', hint: '' })
+  expect(enemyCharacter('Catapult (enemy)', "{{Enemy infobox\n|filename = x}}\nThe '''\"Catapult\"''' is an [[elite enemy]].")).toBeNull()
+  expect(enemyCharacter('Amiya (Babel)', "{{Enemy infobox\n|x = y}}\n'''[[Amiya/Story#Babel|'Amiya']]''' is a [[boss enemy]].")).toEqual({ page: 'Amiya/Story', hint: 'Babel' })
+  const lavaImgs = [
+    { file: 'Lava.png', label: 'Original' },
+    { file: 'Lava the Purgatory.png', label: 'The Purgatory' },
+  ]
+  expect(pickPortrait(lavaImgs, ['Lava, Flame of Resistance', 'Lava the Purgatory'])?.file).toBe('Lava the Purgatory.png')
+})

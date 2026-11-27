@@ -729,12 +729,12 @@ function findEnemies(q: string): Enemy[] {
 
 // Leaders and enemies named like an operator have their enemy page at "<Name>/Enemy" on the wiki;
 // "go" opens that page when it exists and falls back to search results when it does not.
-const enemyWiki = (e: Enemy) => (e.level === 'Leader' || findOps(e.name, 1)[0]?.name === e.name ? `${WIKI}/index.php?search=${encodeURIComponent(`${e.name}/Enemy`)}&go=Go` : wikiUrl(e.name))
+const enemyWikiGuess = (e: Enemy) => (e.level === 'Leader' || findOps(e.name, 1)[0]?.name === e.name ? `${WIKI}/index.php?search=${encodeURIComponent(`${e.name}/Enemy`)}&go=Go` : wikiUrl(e.name))
 
 function enemyEmbed(e: Enemy): EmbedBuilder {
   const kind = [e.races.join(', '), e.attack, e.flying ? 'flying' : '', e.damage.length ? `deals ${e.damage.join(' and ')} damage` : ''].filter(Boolean).join(' · ')
   const em = embed(e.name)
-    .setURL(enemyWiki(e))
+    .setURL(enemyWikiGuess(e))
     .setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/enemy/${e.id}.png`)
     .setDescription([`**${e.level}**${e.index ? ` · \`${e.index}\`` : ''}${kind ? ` · ${kind}` : ''}`, e.desc ? `\n*${clip(e.desc, 600)}*` : ''].filter(Boolean).join('\n'))
   if (e.note && e.note !== e.desc) em.addFields({ name: 'In battle', value: clip(e.note, 500) })
@@ -770,11 +770,6 @@ function enemyEmbed(e: Enemy): EmbedBuilder {
   return em.setFooter({ text: `${FOOTER} · Enemy handbook, EN game data` })
 }
 
-// NPC portraits: enemies who are story characters (Jesselton Williams, Yurodstvo, Patriot...) have a
-// wiki page with a "Character infobox" whose image list holds their official portraits.
-type Portraits = { page: string; images: { label: string; url: string }[] }
-const portraitCache = new Map<string, { at: number; value: Portraits | null }>()
-
 /** Every image in a wiki infobox, with its tab label ("Talulah (Act I).png:NPC (Prologue to Act II)"). */
 export function parseInfoboxImages(wikitext: string): { kind: 'character' | 'operator' | 'faction'; images: { file: string; label: string }[] } | null {
   const at = wikitext.search(/\{\{\s*(Character|Operator|Faction) infobox/i)
@@ -793,15 +788,18 @@ export function parseInfoboxImages(wikitext: string): { kind: 'character' | 'ope
   return { kind, images }
 }
 
-/** Which infobox image fits an enemy: one named after it (Talulah, the Fighter), else an NPC tab, else the first
- * that is not the operator art.
- * Later images are often other people or looks (Yurodstvo's other avatars), so the first is the safe default. */
-export function pickPortrait(images: { file: string; label: string }[], enemyName: string): { file: string; label: string } | undefined {
-  const n = normName(enemyName)
+/** Which infobox image fits an enemy: one named after it or after the character link ("Lava the Purgatory"),
+ * then a label matching the link's section ("Amiya/Story#Babel"), then an NPC tab, then the first image that
+ * is not operator art. Later images are often other people (Yurodstvo's avatars), so earlier ones win. */
+export function pickPortrait(images: { file: string; label: string }[], names: string | string[], hint = ''): { file: string; label: string } | undefined {
+  const ns = (Array.isArray(names) ? names : [names]).map(normName).filter(Boolean)
+  const h = normName(hint)
+  const ok = (x: { label: string }) => !/operator/i.test(x.label)
   return (
-    images.find(x => !/operator/i.test(x.label) && normName(x.file.replace(/\.\w+$/, '')) === n) ??
+    ns.map(n => images.find(x => ok(x) && normName(x.file.replace(/\.\w+$/, '')) === n)).find(Boolean) ??
+    (h ? images.find(x => ok(x) && normName(x.label).includes(h)) : undefined) ??
     images.find(x => /^NPC\b/i.test(x.label)) ??
-    images.find(x => !/operator/i.test(x.label)) ??
+    images.find(ok) ??
     images[0]
   )
 }
@@ -809,7 +807,7 @@ export function pickPortrait(images: { file: string; label: string }[], enemyNam
 async function wikiApi(params: Record<string, string>): Promise<any> {
   const u = new URL(`${WIKI}/api.php`)
   for (const [k, v] of Object.entries({ format: 'json', redirects: '1', ...params })) u.searchParams.set(k, v)
-  const r = await fetch(u, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(4000) })
+  const r = await fetch(u, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(8000) })
   if (!r.ok) throw new Error(`wiki ${r.status}`)
   return r.json()
 }
@@ -849,25 +847,51 @@ async function infoboxOf(page: string): Promise<{ title: string; box: ReturnType
   return { title: String(r.parse.title ?? page), box: parseInfoboxImages(String(r.parse.wikitext?.['*'] ?? '')) }
 }
 
-/** The portrait for an enemy from its wiki page. Operator pages (Crownslayer, Talulah) keep the NPC art on "<page>/Story". */
-async function npcPortraits(name: string, enemyName: string): Promise<Portraits | null> {
-  const key = `${name}\n${enemyName}`
-  const hit = portraitCache.get(key)
-  if (hit && Date.now() - hit.at < 6 * 3600_000) return hit.value
-  let value: Portraits | null = null
+type EnemyWiki = { enemyPage?: string; character?: string; portrait?: string }
+const enemyWikiCache = new Map<string, { at: number; value: EnemyWiki }>()
+
+/** The character an enemy page is about: "Talulah/Ally" -> Talulah, or the link in the bold lead
+ * ("'''[[Lava the Purgatory|Lava]], Flame of Resistance'''"). Generic enemies (the "Catapult", Frost) have none. */
+export function enemyCharacter(title: string, wikitext: string): { page: string; hint: string } | null {
+  if (title.includes('/')) return { page: title.split('/')[0], hint: '' }
+  const body = wikitext.slice(Math.max(0, wikitext.search(/\{\{\s*Enemy infobox/i)))
+  const lead = /'''(.+?)'''/.exec(body.slice(body.indexOf('}}')))
+  const link = lead && /\[\[([^\]|#]+)(?:#([^\]|]+))?(?:\|[^\]]*)?\]\]/.exec(lead[1])
+  if (!link || /enemy$/i.test(link[1])) return null
+  return { page: link[1].trim(), hint: (link[2] ?? '').trim() }
+}
+
+/** The enemy's own wiki page (found by its game id), the character it shows, and that character's portrait.
+ * Operator pages keep the NPC art on "<page>/Story". */
+async function enemyWiki(e: Enemy): Promise<EnemyWiki> {
+  const hit = enemyWikiCache.get(e.id)
+  if (hit && Date.now() - hit.at < 12 * 3600_000) return hit.value
+  const value: EnemyWiki = {}
   try {
-    let pg = await infoboxOf(name)
-    if (pg?.box?.kind === 'operator') pg = (await infoboxOf(`${pg.title}/Story`).catch(() => null)) ?? pg
-    const pick = pg?.box ? pickPortrait(pg.box.images, enemyName) : undefined
-    if (pg && pick) {
-      const info = await wikiApi({ action: 'query', titles: `File:${pick.file}`, prop: 'imageinfo', iiprop: 'url' })
-      const url = Object.values<any>(info?.query?.pages ?? {})[0]?.imageinfo?.[0]?.url
-      if (url) value = { page: pg.title.replace(/\/Story$/, ''), images: [{ label: pick.label || 'Portrait', url }] }
+    const found = await wikiApi({ action: 'query', list: 'search', srsearch: `insource:"${e.id}"`, srlimit: '5', srnamespace: '0' })
+    for (const r of found?.query?.search ?? []) {
+      const pg = await wikiApi({ action: 'parse', page: r.title, prop: 'wikitext', section: '0' })
+      const text = String(pg?.parse?.wikitext?.['*'] ?? '')
+      if (!new RegExp(`filename\\s*=\\s*${e.id}\\s*[\\n|}]`).test(text)) continue
+      value.enemyPage = String(pg.parse.title)
+      const ch = enemyCharacter(value.enemyPage, text)
+      if (ch) {
+        let box = await infoboxOf(ch.page)
+        if (box?.box?.kind === 'operator') box = (await infoboxOf(`${box.title}/Story`).catch(() => null)) ?? box
+        const pick = box?.box ? pickPortrait(box.box.images, [e.name.replace(/^'|'$/g, ''), ch.page], ch.hint) : undefined
+        if (box && pick) {
+          const info = await wikiApi({ action: 'query', titles: `File:${pick.file}`, prop: 'imageinfo', iiprop: 'url' })
+          value.portrait = Object.values<any>(info?.query?.pages ?? {})[0]?.imageinfo?.[0]?.url
+          value.character = box.title.replace(/\/Story$/, '')
+        }
+      }
+      break
     }
   } catch {
     if (hit) return hit.value
+    return value // not cached, so a wiki hiccup is retried next time
   }
-  portraitCache.set(key, { at: Date.now(), value })
+  enemyWikiCache.set(e.id, { at: Date.now(), value })
   return value
 }
 
@@ -889,12 +913,11 @@ export async function wikiPortrait(page: string): Promise<string | null> {
 /** The /enemy reply, with buttons for the enemy's other variants (`arkp:enemy:<enemy id>`). */
 async function enemyView(e: Enemy): Promise<{ embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder>[] }> {
   const em = enemyEmbed(e)
-  const base = enemyBaseName(e.name)
-  const plain = e.name.replace(/^'|'$/g, '')
-  const pr = (await npcPortraits(base, plain)) ?? (base !== plain ? await npcPortraits(plain, plain) : null)
+  const wk = await enemyWiki(e)
   const rows: ActionRowBuilder<ButtonBuilder>[] = []
-  if (pr) {
-    em.setImage(pr.images[0].url)
+  if (wk.enemyPage) em.setURL(wikiUrl(wk.enemyPage))
+  if (wk.portrait) {
+    em.setImage(wk.portrait)
     em.setFooter({ text: `${FOOTER} · Enemy handbook, EN game data · Portrait from the Arknights wiki` })
   }
   const vars = enemyVariants(e)
@@ -916,8 +939,13 @@ async function enemyView(e: Enemy): Promise<{ embeds: EmbedBuilder[]; components
       ),
     )
   }
-  const links = new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Wiki').setURL(enemyWiki(e)))
-  if (pr) links.addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Character page').setURL(wikiUrl(pr.page)))
+  const links = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setStyle(ButtonStyle.Link)
+      .setLabel('Wiki')
+      .setURL(wk.enemyPage ? wikiUrl(wk.enemyPage) : enemyWikiGuess(e)),
+  )
+  if (wk.character) links.addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Character page').setURL(wikiUrl(wk.character)))
   rows.push(links)
   return { embeds: [em], components: rows }
 }
@@ -1102,9 +1130,10 @@ export async function handleArkPlusButton(i: ButtonInteraction): Promise<void> {
       await i.reply({ content: '[PRTS] That record is not available right now. Please try again shortly. I apologize.', flags: MessageFlags.Ephemeral })
       return
     }
-    const view = stampEmbeds(await enemyView(e), SECTION.enemy) as Awaited<ReturnType<typeof enemyView>>
-    if (i.message?.flags?.has(MessageFlags.Ephemeral)) await i.update(view)
-    else await i.reply({ ...view, flags: MessageFlags.Ephemeral })
+    // The wiki lookup can take longer than Discord's 3 second window, so acknowledge first.
+    const inPlace = i.message?.flags?.has(MessageFlags.Ephemeral)
+    await (inPlace ? i.deferUpdate() : i.deferReply({ flags: MessageFlags.Ephemeral }))
+    await i.editReply(stampEmbeds(await enemyView(e), SECTION.enemy) as Awaited<ReturnType<typeof enemyView>>)
     return
   }
   const m = /^arkp:mat:([^:]+):(\w+)$/.exec(i.customId)

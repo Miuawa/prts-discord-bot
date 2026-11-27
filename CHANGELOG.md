@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `/enemy` finds each enemy's own wiki page by its game id and takes the portrait from the
+  character that page names (Lava, Flame of Resistance: Lava the Purgatory). Enemies that only share
+  a name with an operator (the "Catapult", Frost) get no portrait. The Wiki button opens the enemy's
+  own page.
 - `/enemy` picks the NPC art for enemies who are also operators (Talulah, Crownslayer) from the
   wiki's Story page, and art named after the variant (Talulah, the Fighter). `/operator` for a name
   not in the EN data (NPCs, CN-only operators) shows the wiki picture.
