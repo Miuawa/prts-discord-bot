@@ -150,7 +150,7 @@ registerHelp([
     group: 'Arknights records',
     short: 'Stage cost, recommended level and drops',
     usage: '/stage name:<code or name>',
-    detail: "Shows a stage's sanity cost, recommended level, what it drops and how often, and what it gives on clear. Start typing for suggestions.",
+    detail: "Shows a stage's sanity cost, recommended level, what it drops and how often, what it gives on clear, and which enemies appear (Leaders first, with counts). Start typing for suggestions.",
     examples: ['/stage name: 4-6', '/stage name: S3-3', '/stage name: Years of Passion'],
   },
   {
@@ -167,7 +167,8 @@ registerHelp([
     group: 'Arknights records',
     short: 'Two operators side by side',
     usage: '/compare operator1:<name> operator2:<name>',
-    detail: 'Compares maximum stats (HP, ATK, DEF, RES, DP cost, block, redeploy time, attack interval) at the highest promotion and level, without potential, trust or module bonuses.',
+    detail:
+      "Compares maximum stats (HP, ATK, DEF, RES, DP cost, block, redeploy time, attack interval) at the highest promotion and level, without potential, trust or module bonuses, then each operator's tier, modules with their community grade, and the tier sheet's verdict.",
     examples: ['/compare operator1: Saria operator2: Hoshiguma'],
   },
   {
@@ -193,7 +194,8 @@ registerHelp([
     group: 'Utilities',
     short: 'Reminders in the channel or by DM',
     usage: '/remind add in:<30m, 2h, 1d> message:<text> | list | cancel id:<n>',
-    detail: 'PRTS posts your reminder in the same channel and mentions you when it is due. If that channel is not reachable, I send it by direct message instead. Up to 25 pending reminders each.',
+    detail:
+      'PRTS posts your reminder as a card in the same channel and mentions you when it is due. If that channel is not reachable, I send it by direct message instead. Up to 25 pending reminders each; reminder numbers start again from 1 once none are pending.',
     examples: ['/remind add in: 2h message: Collect base production', '/remind list', '/remind cancel id: 3'],
   },
 ])

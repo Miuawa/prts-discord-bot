@@ -2601,7 +2601,7 @@ const HELP: HelpEntry[] = [
     short: 'AK Tier List by tier, class or operator',
     usage: '/tier [tier:<EX…C->] [class:<class>] [operator:<name>]',
     detail:
-      'With no options it lists the top tiers (EX to A). Pick a tier, a class, or both to filter, or give one operator to see their rating. Fan-made list for the global server, assuming full investment. Updated live from the Google Sheet.',
+      "With no options: every grade, one page per grade with names grouped by class (use the page buttons). Pick a tier, a class, or both to filter. With operator: a card with their grade, the sheet's written assessment and their rating history. Fan-made list for the global server, assuming full investment; refreshed from the Google Sheet every 6 hours.",
     examples: ['/tier', '/tier tier: S+', '/tier class: Medic', '/tier operator: Texas the Omertosa'],
   },
 
@@ -2611,7 +2611,7 @@ const HELP: HelpEntry[] = [
     short: 'Best stages to farm a material',
     usage: '/farm material:<material>',
     detail:
-      'Lists the 10 most sanity-efficient stages for a material, with efficiency relative to the best stage and the main drop rate. Data from the PeterYR sheet (Penguin Statistics). Materials autocomplete.',
+      'Lists the 10 most sanity-efficient stages for a material, with efficiency relative to the best stage and the main drop rate. Data from the PeterYR sheet (Penguin Statistics), refreshed every 6 hours; new material families appear under their proper names as soon as the sheet adds them. Materials autocomplete.',
     examples: ['/farm material: Device', '/farm material: Orirock', '/farm material: RMA70-12'],
   },
   {
@@ -2629,7 +2629,7 @@ const HELP: HelpEntry[] = [
     short: 'Base (RIIC) skills and team combos',
     usage: '/base [operator:<name>] [team:<team>] [facility:<facility>]',
     detail:
-      "operator: shows the operator's official base skills (with unlock level), notes from the RIIC guide, and the team combos they appear in. team: shows a combo's members, effect and explanation. facility: lists the combos for one facility. No option: an overview of all combos. Updated live from the RIIC Google Sheet.",
+      "operator: the operator's official base skills (facility and unlock), which facilities they work best in, notes from the RIIC guide, and the team combos they appear in. team: the combo's facility and effect in plain words (no MD/CC shorthand), core members with a portrait, and how it works. facility: one card per combo with its effect and members. No option: an overview of all combos. Refreshed from the RIIC Google Sheet every 6 hours.",
     examples: ['/base operator: Proviso', '/base team: Vermeil Team (EXP)', '/base facility: Trading Post'],
   },
   {
@@ -2637,7 +2637,8 @@ const HELP: HelpEntry[] = [
     group: 'Arknights records',
     short: 'Search arknights.wiki.gg',
     usage: '/wiki query:<anything>',
-    detail: 'Finds the best matching wiki page, shows a short summary and links to related pages. Page titles autocomplete as you type.',
+    detail:
+      'Finds the best matching wiki page and shows its picture, summary, key facts (race, affiliation, birthplace, status, appearances), links to its sections, and related pages. Page titles autocomplete as you type.',
     examples: ['/wiki query: Kazdel', '/wiki query: Originium'],
   },
   {
@@ -2698,9 +2699,9 @@ const HELP: HelpEntry[] = [
     cmd: 'roll',
     group: 'Utilities',
     short: 'Dice, coin toss, or let PRTS choose',
-    usage: '/roll dice [dice:<expression>] [reason:<text>] | coin [count:<1-100>] [call:<heads|tails>] | choose options:<a | b | c>',
+    usage: '/roll dice [dice:<expression>] [reason:<text>] | coin [count:<1-100>] [call:<heads|tails>] [reason:] | choose options:<a | b | c> [reason:]',
     detail:
-      'dice: default 1d20. Supports several dice and modifiers (2d6+3, 1d20+1d4-1), keep highest/lowest (4d6kh3, 2d20kl1), and percentile (d%). Max 100 dice. Kept maximum rolls are bold, dropped dice are struck through.\ncoin: one coin, or up to 100 with a heads/tails tally. Call it beforehand if you like.\nchoose: separate options with | or commas; PRTS picks one at random, without hesitation.',
+      'dice: default 1d20. Supports several dice and modifiers (2d6+3, 1d20+1d4-1), keep highest/lowest (4d6kh3, 2d20kl1), and percentile (d%). Max 100 dice. Kept maximum rolls are bold, dropped dice are struck through, and the reply explains the notation (XdY = X dice with Y sides, +N adds N, khN/klN keeps the highest/lowest N, d% = 1 to 100).\ncoin: one coin, or up to 100 with a heads/tails tally. Call it beforehand if you like.\nchoose: separate options with | or commas; PRTS picks one at random, without hesitation.\nEvery /roll takes an optional reason, shown as the title.',
     examples: ['/roll dice', '/roll dice dice: 4d6kh3 reason: Strength', '/roll coin count: 10', '/roll choose options: tea | coffee | juice'],
   },
 
