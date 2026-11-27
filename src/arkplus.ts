@@ -799,9 +799,9 @@ export function parseInfoboxImages(wikitext: string): { kind: 'character' | 'ope
 export function pickPortrait(images: { file: string; label: string }[], enemyName: string): { file: string; label: string } | undefined {
   const n = normName(enemyName)
   return (
-    images.find(x => !/^operator$/i.test(x.label) && normName(x.file.replace(/\.\w+$/, '')) === n) ??
+    images.find(x => !/operator/i.test(x.label) && normName(x.file.replace(/\.\w+$/, '')) === n) ??
     images.find(x => /^NPC\b/i.test(x.label)) ??
-    images.find(x => !/^operator$/i.test(x.label)) ??
+    images.find(x => !/operator/i.test(x.label)) ??
     images[0]
   )
 }
