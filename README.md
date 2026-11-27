@@ -17,6 +17,14 @@ yourself. Extra features, like the roleplay narrator, are optional
 > Discord, Hypergryph, Studio Montagne or Yostar. No game assets or story text are included;
 > game data is fetched at runtime from public community sources. See [NOTICE](NOTICE).
 
+**Documentation:** the [Wiki](https://github.com/Miuawa/prts-discord-bot/wiki) has a guided tour:
+[Installation](https://github.com/Miuawa/prts-discord-bot/wiki/Installation),
+[Configuration](https://github.com/Miuawa/prts-discord-bot/wiki/Configuration),
+[Commands](https://github.com/Miuawa/prts-discord-bot/wiki/Commands),
+[Modules](https://github.com/Miuawa/prts-discord-bot/wiki/Modules),
+[Troubleshooting](https://github.com/Miuawa/prts-discord-bot/wiki/Troubleshooting) and
+[FAQ](https://github.com/Miuawa/prts-discord-bot/wiki/FAQ). This README stays the full reference.
+
 ## Features
 
 - **Arknights tools, no AI needed**: `/operator`, `/skin`, `/tier`, `/farm`,
