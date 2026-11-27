@@ -878,6 +878,10 @@ const CHOSEN_PORTRAIT: Record<string, { file: string; page: string; note?: strin
   enemy_1564_mpprts: { file: '60 i16.png', page: 'PRTS', note: 'The PRTS mainframe' }, // PRTS, Source Code (not the logo)
   enemy_2016_csphtm: { file: 'Phantom IS2 Mask.png', page: 'Phantom', note: "Phantom as the 'Blood Diamond'" }, // Lucian
   enemy_1591_mutwin: { file: 'AMa-10.png', page: "Kal'tsit" }, // AMa-10 Isomer: the same boss as AMa-10
+  // Sui and its claws: a story scene of Sui instead of its emblem (Hierda's pick).
+  enemy_1582_suisho: { file: '70 i07.png', page: 'Sui' },
+  enemy_1583_suizzh: { file: '70 i07.png', page: 'Sui' },
+  enemy_1584_suiyzh: { file: '70 i07.png', page: 'Sui' },
   enemy_2039_syskad: { file: 'Skadi the Corrupting Heart.png', page: 'Skadi the Corrupting Heart', note: 'Shown as Skadi the Corrupting Heart' }, // Ishar'mla (wiki has only a sea scene)
   // The Deathless Black Snake fights in Talulah's body, so show what the player faces.
   enemy_1515_bsnake: { file: 'Talulah (Act I).png', page: 'Talulah', note: "Appears in Talulah's body" },
@@ -946,6 +950,13 @@ export async function enemyWiki(e: Enemy): Promise<EnemyWiki> {
     if (chosen && !value.portrait) {
       value.portrait = await fileUrl(chosen.file)
       if (value.portrait) Object.assign(value, { character: chosen.page, note: chosen.note })
+    }
+    // A variant with no picture of its own (enemy_1277_sgman_2) falls back to its base enemy's (Hierda, 2026-11-27).
+    const baseId = e.id.replace(/_\d+$/, '')
+    const base = baseId !== e.id ? plus?.enemies?.[baseId] : undefined
+    if (!value.portrait && base && !NO_PORTRAIT.has(e.id)) {
+      const bw = await enemyWiki(base)
+      if (bw.portrait) Object.assign(value, { portrait: bw.portrait, character: bw.character, note: bw.note ?? `Same picture as ${base.name.replace(/^'|'$/g, '')}` })
     }
   } catch {
     if (hit) return hit.value
