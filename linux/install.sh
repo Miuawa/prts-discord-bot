@@ -3,12 +3,12 @@
 #
 #   linux/install.sh [--no-narrator] [--no-llama]
 #
-# Installs the bot unit, the Claude Code narrator units (only needed when a
-# backend is claude-code or auto) and the llama-server unit (only needed for a
-# local model), plus the units of every module listed in PRTS_MODULES
-# (modules/<name>/linux/systemd/). Units are templates: @ROOT@, @BUN@, @TMUX@
-# and @LLAMA_SERVER@ are replaced with this checkout's path and the programs
-# found on PATH. Creates .env from .env.example if there is none yet.
+# Installs the bot unit, the nightly backup (prts-backup.timer), the Claude
+# Code narrator units (only needed when a backend is claude-code or auto) and
+# the llama-server unit (only needed for a local model), plus the units of
+# every module listed in PRTS_MODULES (modules/<name>/linux/systemd/). Units
+# are templates: @ROOT@, @BUN@, @TMUX@ and @LLAMA_SERVER@ are replaced with
+# this checkout's path and the programs found on PATH. Creates .env from .env.example if there is none yet.
 # Nothing is started or enabled; see README.md ("Running on Linux").
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -35,7 +35,7 @@ SWAP_BIN="$(command -v llama-swap || true)"
 # Enabled modules: PRTS_MODULES from the environment, else from .env.
 MODULES="${PRTS_MODULES:-$(sed -n 's/^PRTS_MODULES=//p' "$ROOT/.env" | tail -1)}"
 
-units=("$DIR"/systemd/prts-bot.service)
+units=("$DIR"/systemd/prts-bot.service "$DIR"/systemd/prts-backup.service "$DIR"/systemd/prts-backup.timer)
 [ "$NARRATOR" = 1 ] && units+=("$DIR"/systemd/prts-narrator*.service "$DIR"/systemd/prts-narrator*.timer)
 [ "$LLAMA" = 1 ] && units+=("$DIR"/systemd/llama-server.service)
 # llama-swap (several local models on one address) when it is installed.

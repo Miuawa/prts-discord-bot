@@ -1,0 +1,12 @@
+# Backup of the PRTS bot's settings and saved data (linux/backup.sh).
+# Runs from prts-backup.timer, or by hand: systemctl --user start prts-backup.service
+# Template: linux/install.sh fills in @ROOT@.
+[Unit]
+Description=Back up the PRTS bot's settings and saved data
+
+[Service]
+Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+UMask=0077
+ExecStart=@ROOT@/linux/backup.sh

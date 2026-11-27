@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly backup of the PRTS bot's settings and saved data (03:30, or at next login if missed)
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

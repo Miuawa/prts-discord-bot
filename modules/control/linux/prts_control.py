@@ -67,6 +67,75 @@ def print_status():
     for s in load_services():
         a, e = state(s["unit"])
         print(f"{s['label']:<16} {s['unit']:<24} {a:<12} {'starts on login' if e else 'manual'}")
+    b = backup_info()
+    if b["installed"]:
+        print(f"{'Backups':<16} {BACKUP_TIMER:<24} {b['summary']}")
+
+
+# Nightly backup (linux/backup.sh, prts-backup.timer). backup.sh writes the result
+# of its last run here.
+BACKUP_UNIT, BACKUP_TIMER = "prts-backup.service", "prts-backup.timer"
+BACKUP_STATUS = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "prts" / "backup.json"
+BACKUP_STALE_HOURS = 36
+
+
+def human_size(n):
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+
+
+def backup_info():
+    """State of the nightly backup: installed, enabled (timer), running, last result, next run."""
+    code, load = systemctl("show", BACKUP_TIMER, "-p", "LoadState", "--value")
+    info = {"installed": code == 0 and load == "loaded", "enabled": False, "running": False,
+            "level": "off", "summary": "not installed (run linux/install.sh)", "dir": None}
+    if not info["installed"]:
+        return info
+    _, en = systemctl("is-enabled", BACKUP_TIMER)
+    info["enabled"] = en.startswith("enabled")
+    _, act_state = systemctl("is-active", BACKUP_UNIT)
+    info["running"] = act_state.startswith("activating")
+    try:
+        last = json.loads(BACKUP_STATUS.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        last = None
+    parts = []
+    level = "ok"
+    if info["running"]:
+        parts.append("backing up now...")
+        level = "busy"
+    elif last is None:
+        parts.append("no backup yet")
+        level = "warn"
+    else:
+        from datetime import datetime
+        info["dir"] = last.get("dir")
+        try:
+            when = datetime.fromisoformat(last["time"])
+            age_h = (datetime.now(when.tzinfo) - when).total_seconds() / 3600
+            when_text = when.strftime("%Y-%m-%d %H:%M")
+        except (KeyError, ValueError, TypeError):
+            age_h, when_text = None, "unknown time"
+        if last.get("ok"):
+            parts.append(f"last {when_text}, {human_size(last.get('size', 0))}, {last.get('kept', '?')} kept")
+            if info["enabled"] and age_h is not None and age_h > BACKUP_STALE_HOURS:
+                parts.append(f"older than {BACKUP_STALE_HOURS} h")
+                level = "warn"
+        else:
+            parts.append(f"FAILED {when_text}: {last.get('error') or 'see Logs'}")
+            level = "bad"
+    if info["enabled"]:
+        _, nxt = systemctl("show", BACKUP_TIMER, "-p", "NextElapseUSecRealtime", "--value")
+        if nxt and nxt != "n/a":
+            parts.append("next " + " ".join(nxt.split()[1:3])[:16])
+    else:
+        parts.append("nightly backup is off")
+        if level == "ok":
+            level = "warn"
+    info["level"], info["summary"] = level, " · ".join(parts)
+    return info
 
 
 if "--status" in sys.argv:
@@ -320,6 +389,27 @@ class Window(QWidget):
                 term.clicked.connect(lambda _=False, s=s: app.open_terminal(s))
                 grid.addWidget(term, r, 6)
             self.rows[s["unit"]] = (dot, status, btn, login)
+        r = len(app.services)
+        self.backup_dot = QLabel()
+        self.backup_name = QLabel()
+        self.backup_name.setWordWrap(True)
+        self.backup_now = QPushButton("Back up now")
+        self.backup_now.setToolTip("Run linux/backup.sh now (prts-backup.service)")
+        self.backup_now.clicked.connect(app.backup_now)
+        self.backup_login = QCheckBox("Nightly")
+        self.backup_login.setToolTip("Back up every night at 03:30 (prts-backup.timer)")
+        self.backup_login.clicked.connect(app.set_backup_timer)
+        backup_logs = QPushButton("Logs")
+        backup_logs.setToolTip(f"Log of {BACKUP_UNIT}")
+        backup_logs.clicked.connect(lambda: app.show_logs([{"unit": BACKUP_UNIT, "label": "Backups"}]))
+        self.backup_folder = QPushButton("Folder")
+        self.backup_folder.setToolTip("Open the backup folder")
+        self.backup_folder.clicked.connect(app.open_backup_folder)
+        for c, w in enumerate((self.backup_dot, self.backup_name)):
+            grid.addWidget(w, r, c)
+        grid.addWidget(self.backup_now, r, 3)
+        for c, w in ((4, self.backup_login), (5, backup_logs), (6, self.backup_folder)):
+            grid.addWidget(w, r, c)
         grid.setColumnStretch(1, 1)
         outer.addLayout(grid)
         line = QFrame()
@@ -361,6 +451,16 @@ class Window(QWidget):
                 notes.append(f"<b>{s['label']} is off:</b> {s['when_off']}")
             if active == "failed":
                 notes.append(f"<b>{s['label']} failed.</b> Press Start to try again, or Logs to see why.")
+        b = self.app.backup
+        color = {"ok": GREEN, "busy": YELLOW, "warn": YELLOW, "bad": RED}.get(b["level"], GREY)
+        self.backup_dot.setPixmap(dot_icon(color, 18).pixmap(18, 18))
+        self.backup_name.setText(f"<b>Backups</b><br><span style='color:{color if b['level'] in ('bad', 'warn') else 'gray'}'>{b['summary']}</span>")
+        self.backup_now.setEnabled(b["installed"] and not b["running"])
+        self.backup_login.setEnabled(b["installed"])
+        self.backup_login.setChecked(b["enabled"])
+        self.backup_folder.setEnabled(bool(b["dir"]))
+        if b["level"] == "bad":
+            notes.append("<b>The last backup failed.</b> Press Logs next to Backups to see why, then Back up now.")
         self.notes.setText("<br>".join(notes) or "All PRTS services are running.")
         self.adjustSize()
 
@@ -375,6 +475,8 @@ class Control:
         self.qapp = qapp
         self.services = load_services()
         self.states = {}
+        self.backup = backup_info()
+        self.backup_tick = 0
         self.tray_color = GREY
         self.tray = QSystemTrayIcon(status_icon(GREY))
         self.tray.setToolTip("PRTS Control")
@@ -399,6 +501,7 @@ class Control:
                 self.menu.addAction(f"{s['label']} terminal", lambda s=s: self.open_terminal(s))
         self.log_windows = {}
         self.menu.addSeparator()
+        self.menu.addAction("Back up now", self.backup_now)
         self.menu.addAction("Open PRTS Control", self.show_window)
         self.menu.addAction("Quit (services keep running)", qapp.quit)
         self.tray.setContextMenu(self.menu)
@@ -472,6 +575,12 @@ class Control:
             a, _ = self.states[s["unit"]]
             self.actions[s["unit"]].setChecked(a in ("active", "activating"))
             lines.append(f"{s['label']}: {STATE_TEXT.get(a, (a, None))[0]}")
+        # The backup changes rarely: check it every 10 s, or every tick while it runs.
+        self.backup_tick += 1
+        if self.backup["running"] or self.backup_tick % 5 == 0:
+            self.backup = backup_info()
+        if self.backup["installed"]:
+            lines.append(f"Backups: {self.backup['summary']}")
         self.tray.setToolTip("PRTS Control\n" + "\n".join(lines))
         if self.window.isVisible():
             self.window.refresh(self.states)
@@ -509,6 +618,28 @@ class Control:
         for s in reversed(self.services):
             act("stop", s["unit"])
         QTimer.singleShot(300, self.refresh)
+
+    def backup_now(self):
+        if not self.backup["installed"]:
+            QMessageBox.information(self.window, "PRTS Control", "The backup is not installed. Run linux/install.sh first.")
+            return
+        act("start", BACKUP_UNIT)
+        QTimer.singleShot(500, self.refresh_backup)
+
+    def refresh_backup(self):
+        self.backup = backup_info()
+        self.refresh()
+
+    def set_backup_timer(self, on):
+        verb = ["enable", "--now"] if on else ["disable", "--now"]
+        code, out = systemctl(*verb, BACKUP_TIMER)
+        if code != 0:
+            QMessageBox.warning(self.window, "PRTS Control", f"Could not change {BACKUP_TIMER}:\n{out}")
+        self.refresh_backup()
+
+    def open_backup_folder(self):
+        if self.backup.get("dir"):
+            QProcess.startDetached("xdg-open", [self.backup["dir"]])
 
     def set_login(self, s, on):
         code, out = systemctl("enable" if on else "disable", s["unit"])

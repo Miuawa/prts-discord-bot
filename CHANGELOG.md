@@ -2,6 +2,11 @@
 
 ## 0.2.2 (2026-11-28)
 
+### New
+- Nightly backups: `linux/backup.sh` with `prts-backup.timer` (03:30) saves `.env`, `cache/` and the
+  Discord state folder to `~/PRTS-backups/bot/` (private, newest 7 kept, optional gpg encryption).
+  `linux/install.sh` installs the units; PRTS Control shows the last backup and has Back up now.
+
 ### Changed
 - `src/ark.ts` (about 2,900 lines) is split into one file per command under `src/ark/` (`roll`, `operator`,
   `tier`, `farm`, `recruit`, `wiki`, `story`, `base`, `skin`, `myrtle`, `help`), plus shared `definitions`,

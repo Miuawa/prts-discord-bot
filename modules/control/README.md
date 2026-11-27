@@ -9,6 +9,10 @@ needs no `PRTS_MODULES` entry, and works whether or not other modules are enable
 - Shows each service with its state (running, starting, stopping, off, failed).
 - **Start / Stop** per service, **Start all / Stop all**, and a **Start on login** checkbox
   (`systemctl --user enable/disable`).
+- **Backups** row: when the last nightly backup ran (or why it failed), how many are kept and
+  when the next one runs, with **Back up now**, a **Nightly** checkbox (`prts-backup.timer`),
+  its **Logs** and the backup **Folder**. It turns yellow when the timer is off or the newest
+  backup is more than 36 hours old, red when the last one failed. See the main README, "Backups".
 - Explains what being off means for each service, and asks before stopping the Discord bot.
 - **Logs** per service and **All logs**: a live view of the service journal
   (`journalctl --user -f`), with a level filter (everything, warnings, errors), a text
@@ -32,7 +36,7 @@ That image is copyright Hypergryph Network Technology Co., Ltd. It is not part o
 project and is not covered by this repo's license. It's for your own personal use; see the
 official [Terms and Conditions of Re-creation](https://www.arknights.global/fankit/guidelines)
 before using it anywhere public. The file name is gitignored so it never gets committed.
-- `prts_control.py --status` prints the states in a terminal and exits (no window).
+- `prts_control.py --status` prints the states (and the backup state) in a terminal and exits (no window).
 
 By default it controls the units from `linux/install.sh`: `llama-server.service` (local model),
 `prts-bot.service` (the Discord bot) and `prts-narrator.service` (the Claude Code narrator).

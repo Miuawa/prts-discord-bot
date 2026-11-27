@@ -239,6 +239,7 @@ Settings come from the real environment, then `<repo>/.env` (or `PRTS_ENV_FILE`)
 ```bash
 linux/install.sh                        # renders the units into ~/.config/systemd/user, creates .env
 systemctl --user enable --now prts-bot.service
+systemctl --user enable --now prts-backup.timer    # nightly backup of settings and saved data
 # Only for the claude-code (or auto) backend:
 systemctl --user enable --now prts-narrator.service           # Claude Code narrator in tmux
 systemctl --user enable --now prts-narrator-restart.timer     # fresh narrator session at 05:00 (confirm its prompt)
@@ -258,6 +259,30 @@ loginctl enable-linger "$USER"          # optional: keep running while logged ou
 - `linux/restart-bot.sh` restarts only the bot; `linux/restart-narrator.sh` saves the chat
   to `logs/` and starts a fresh narrator session.
 - Re-run `linux/install.sh` after moving the folder or changing `PRTS_MODULES`.
+
+### Backups
+
+`prts-backup.timer` runs `linux/backup.sh` every night at 03:30 (or at the next login if the PC
+was off). It saves what isn't in git: `.env`, `cache/` (reminders, music history, saved links,
+roleplay players, announce channels) and the Discord state folder (token, `access.json`,
+`bridge.key`), plus PRTS Control's service list. Game data caches and Discord attachments are
+left out because they download again.
+
+- Backups go to `~/PRTS-backups/bot/` and the newest 7 are kept. They contain your token, so the
+  folder is mode 700 and each file 600; keep them off shared or synced drives. Settings in `.env`:
+  `PRTS_BACKUP_DIR`, `PRTS_BACKUP_KEEP`, `PRTS_BACKUP_EXTRA` (more paths) and
+  `PRTS_BACKUP_GPG_RECIPIENT` (encrypt every backup to one of your gpg keys).
+- Back up now: `systemctl --user start prts-backup.service` (or **Back up now** in PRTS Control,
+  which also shows the last result). List: `linux/backup.sh --list`.
+- Restore: stop the bot, extract over the same paths, start it again:
+
+  ```bash
+  systemctl --user stop prts-bot.service
+  tar --zstd -xpf ~/PRTS-backups/bot/prts-bot-<date>.tar.zst -C /
+  systemctl --user start prts-bot.service
+  ```
+
+  For an encrypted one: `gpg -d <file>.tar.zst.gpg | tar --zstd -xpf - -C /`.
 
 ## Running on Windows
 
