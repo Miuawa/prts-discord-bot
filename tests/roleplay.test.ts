@@ -1,14 +1,8 @@
 // Offline test for the roleplay guard that removes dialogue lines a small model
-// wrote for player characters. Uses a throwaway kit with a two-player table.
+// wrote for player characters. The throwaway kit with a two-player table comes
+// from tests/setup.ts.
 import { describe, expect, test } from 'bun:test'
-import { mkdtempSync, writeFileSync } from 'fs'
-import { tmpdir } from 'os'
-import { join } from 'path'
 
-const kit = mkdtempSync(join(tmpdir(), 'prts-kit-'))
-writeFileSync(join(kit, 'CLAUDE.md'), '| Discord username | Plays |\n|---|---|\n| alice | Amiya |\n| bob | Texas |\n')
-writeFileSync(join(kit, 'rp-channels.json'), '{"channels":{}}\n')
-process.env.RP_KIT_DIR = kit
 const { stripPlayerLines } = await import('../modules/roleplay/prompt.ts')
 
 const turn = [
