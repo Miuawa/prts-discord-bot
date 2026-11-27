@@ -1007,12 +1007,22 @@ async function cmdChoose(i: ChatInputCommandInteraction, eph: boolean) {
 
 // ───────────────────────── /operator ─────────────────────────
 
-function opLinks(o: Op): string {
-  const links = [`[Wiki](${wikiUrl(o.name)})`, `[Myrtle](${MYRTLE}/operators/${o.id})`]
+function opLinkRow(o: Op): ActionRowBuilder<ButtonBuilder> {
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Wiki').setURL(wikiUrl(o.name)),
+    new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Myrtle').setURL(`${MYRTLE}/operators/${o.id}`),
+  )
   const slug = data?.timoOps[o.id]
-  if (slug) links.push(`[Story records](${TIMO}/operators/${slug})`, `[Voice lines](${TIMO}/voices/${slug})`)
-  return links.join(' · ')
+  if (slug)
+    row.addComponents(
+      new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Story records').setURL(`${TIMO}/operators/${slug}`),
+      new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Voice lines').setURL(`${TIMO}/voices/${slug}`),
+    )
+  return row
 }
+
+/** The DragonGJY row for a module (matched by its letter, X/Y/D/A). */
+const ratingRow = (m: OpModule, rows: string[][]) => rows.find(row => m.type.endsWith('-' + row[2].trim()))
 
 function tierText(o: Op, sh: Sheets | null): string | null {
   const t = sh?.tierOf.get(normName(o.name))
@@ -1076,23 +1086,28 @@ async function cmdOperator(i: ChatInputCommandInteraction, eph: boolean) {
       .join('\n'),
   })
   const rated = sh?.modules.get(normName(o.name)) ?? []
-  if (o.modules.length) {
+  if (o.modules.length)
     e.addFields({
-      name: `Modules (${o.modules.length})`,
-      value: `Optional upgrades unlocked at ${o.modules[0].unlock ?? 'Elite 2'}. Stage 1 changes the class trait and adds stats; stages 2 and 3 improve a talent.`,
+      name: 'Modules',
+      value: clip(
+        o.modules
+          .map(m => {
+            const g = gradeWord(ratingRow(m, rated)?.[4])
+            return `**${m.type}** ${m.name}${m.form ? ` *(${m.form})*` : ''}${g ? ` · rated ${g}` : ''}`
+          })
+          .join('\n'),
+        1024,
+      ),
     })
-    for (const m of o.modules.slice(0, 4)) {
-      const r = rated.find(row => m.type.endsWith('-' + row[2].trim()))
-      e.addFields({ name: `🔧 ${m.type} · ${m.name}${m.form ? ` (${m.form})` : ''}`, value: clip(moduleCardText(m, r), 1024) })
-    }
-  } else if (rated.length) {
-    e.addFields({ name: 'Modules', value: clip(rated.map(r => `**Module ${r[2].trim()}:** ${clip(r[3], 200)}`).join('\n'), 1024) })
-  }
-  e.addFields({ name: 'Links', value: opLinks(o) })
-  e.setFooter({ text: `${FOOTER} · Module effects from EN game data · Tier and module ratings are fan-made (AK Tier List, DragonGJY)` })
-  const components = rated.length
-    ? [new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(`ark:mod:${o.id}`).setStyle(ButtonStyle.Secondary).setLabel('Module pros and cons'))]
-    : []
+  e.setFooter({ text: `${FOOTER} · Press a button below for details · Tier and module ratings are fan-made` })
+  const components = [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      ...(o.modules.length ? [new ButtonBuilder().setCustomId(`ark:mod:${o.id}`).setStyle(ButtonStyle.Primary).setLabel('Modules').setEmoji('🔧')] : []),
+      new ButtonBuilder().setCustomId(`ark:skin:${o.id}`).setStyle(ButtonStyle.Secondary).setLabel('Outfits').setEmoji('👗'),
+      new ButtonBuilder().setCustomId(`ark:base:${o.id}`).setStyle(ButtonStyle.Secondary).setLabel('Base skills').setEmoji('🏭'),
+    ),
+    opLinkRow(o),
+  ]
   return i.reply({ embeds: [e], components, flags: ephFlag(eph) })
 }
 
@@ -1143,6 +1158,18 @@ async function cmdTier(i: ChatInputCommandInteraction, eph: boolean) {
 
 // ───────────────────────── /module ─────────────────────────
 
+/** The Modules button: what each module does (game data) and the community verdict. */
+function moduleDetailEmbed(o: Op): EmbedBuilder {
+  const rated = loadSheets()?.modules.get(normName(o.name)) ?? []
+  const e = embed(`Modules: ${o.name}`)
+    .setURL(wikiUrl(o.name))
+    .setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${o.id}.png`)
+    .setDescription(`Optional upgrades unlocked at ${o.modules[0]?.unlock ?? 'Elite 2'}. Stage 1 changes the class trait and adds stats; stages 2 and 3 improve a talent.`)
+    .setFooter({ text: `${FOOTER} · Effects from EN game data · Verdicts from DragonGJY's module ratings (fan-made, CN-based)` })
+  for (const m of o.modules.slice(0, 6)) e.addFields({ name: `🔧 ${m.type} · ${m.name}${m.form ? ` (${m.form})` : ''}`, value: clip(moduleCardText(m, ratingRow(m, rated)), 1024) })
+  return e
+}
+
 function moduleEmbed(o: Op): EmbedBuilder {
   const sh = loadSheets()
   const name = o.name
@@ -1173,16 +1200,35 @@ function moduleEmbed(o: Op): EmbedBuilder {
   return e
 }
 
-/** Buttons on bot embeds: `ark:mod:<operator id>` shows the module ratings privately. */
+/** Buttons under /operator (`ark:<what>:<operator id>`): details, shown privately to whoever presses. */
 export async function handleArkButton(i: ButtonInteraction): Promise<void> {
-  const m = /^ark:mod:(.+)$/.exec(i.customId)
+  const m = /^ark:(mod|modpc|skin|base):(.+)$/.exec(i.customId)
   ensureData()
-  const o = m && opIndex()?.byId.get(m[1])
-  if (!o) {
+  const o = m && opIndex()?.byId.get(m[2])
+  if (!m || !o) {
     await i.reply({ content: '[PRTS] That record is no longer available. I apologize.', flags: MessageFlags.Ephemeral })
     return
   }
-  await i.reply({ embeds: [moduleEmbed(o)], flags: MessageFlags.Ephemeral })
+  const eph = MessageFlags.Ephemeral
+  if (m[1] === 'mod') {
+    const rated = loadSheets()?.modules.get(normName(o.name)) ?? []
+    const components = rated.length
+      ? [new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(`ark:modpc:${o.id}`).setStyle(ButtonStyle.Secondary).setLabel('Community pros and cons'))]
+      : []
+    await i.reply({ embeds: [moduleDetailEmbed(o)], components, flags: eph })
+  } else if (m[1] === 'modpc') {
+    await i.reply({ embeds: [moduleEmbed(o)], flags: eph })
+  } else if (m[1] === 'base') {
+    await i.reply({ embeds: [baseOpEmbed(o)], flags: eph })
+  } else {
+    await i.deferReply({ flags: eph })
+    const list = await getOutfits(o.id).catch(() => [])
+    if (!list.length) {
+      await i.editReply({ content: `[PRTS] No outfit records found for **${o.name}**. I apologize.` })
+      return
+    }
+    await i.editReply({ embeds: [outfitListEmbed(o, list)], components: skinButtons(o) })
+  }
 }
 
 // ───────────────────────── /farm ─────────────────────────
@@ -1469,6 +1515,20 @@ async function cmdStory(i: ChatInputCommandInteraction, eph: boolean) {
 
 // ───────────────────────── /base ─────────────────────────
 
+function baseOpEmbed(o: Op): EmbedBuilder {
+  const sh = loadSheets()
+  const footer = `RIIC base skill guide (fan-made, live from Google Sheets) · checked ${sheetDate('riic-base-skills.txt')}`
+  const e = embed(`Base skills: ${o.name}`).setURL(RIIC_URL).setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${o.id}.png`).setFooter({ text: footer })
+  for (const b of (o.base ?? []).slice(0, 6)) e.addFields({ name: `${b.unlock} · ${b.room} · ${b.name}`, value: clip(b.desc, 1024) })
+  if (!o.base?.length) e.setDescription('No base skills found in game data.')
+  const note = sh?.notes.get(normName(o.name))
+  if (note) e.addFields({ name: `Guide notes (${note.facilities})`, value: clip(note.text.replace(/ - /g, '\n- '), 1024) })
+  const key = normName(o.name)
+  const teams = (sh?.teams ?? []).filter(t => t.tokens.has(key))
+  if (teams.length) e.addFields({ name: 'Appears in team combos', value: clip(teams.map(t => `**${t.title}** (${t.facility})`).join('\n'), 1024) })
+  return e
+}
+
 async function cmdBase(i: ChatInputCommandInteraction, eph: boolean) {
   ensureData()
   const sh = loadSheets()
@@ -1480,15 +1540,7 @@ async function cmdBase(i: ChatInputCommandInteraction, eph: boolean) {
     if (!data) return notReady(i, eph)
     const o = findOps(opQ, 1)[0]
     if (!o) return i.reply({ content: `[PRTS] No operator matches "${clip(opQ, 60)}".`, flags: MessageFlags.Ephemeral })
-    const e = embed(`Base skills: ${o.name}`).setURL(RIIC_URL).setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${o.id}.png`).setFooter({ text: footer })
-    for (const b of (o.base ?? []).slice(0, 6)) e.addFields({ name: `${b.unlock} · ${b.room} · ${b.name}`, value: clip(b.desc, 1024) })
-    if (!o.base?.length) e.setDescription('No base skills found in game data.')
-    const note = sh?.notes.get(normName(o.name))
-    if (note) e.addFields({ name: `Guide notes (${note.facilities})`, value: clip(note.text.replace(/ - /g, '\n- '), 1024) })
-    const key = normName(o.name)
-    const teams = (sh?.teams ?? []).filter(t => t.tokens.has(key))
-    if (teams.length) e.addFields({ name: 'Appears in team combos', value: clip(teams.map(t => `**${t.title}** (${t.facility})`).join('\n'), 1024) })
-    return i.reply({ embeds: [e], flags: ephFlag(eph) })
+    return i.reply({ embeds: [baseOpEmbed(o)], flags: ephFlag(eph) })
   }
   if (teamQ) {
     const n = normName(teamQ)
@@ -2150,6 +2202,23 @@ function skinButtons(op: Op, o?: Outfit) {
 const outfitArt = (opId: string, o: Outfit) =>
   o.elite !== undefined ? `${MYRTLE_ASSETS}/chararts/${opId}/${opId}_${o.elite === 0 ? 1 : 2}.png` : `${MYRTLE_ASSETS}/skinpack/${opId}/${encodeURIComponent(o.portrait)}.png`
 
+function outfitListEmbed(op: Op, list: Outfit[]): EmbedBuilder {
+  const page = `${MYRTLE}/operators/${op.id}`
+  const lines = list.map(o => {
+    const tags = [o.animated ? '✨ animated' : '', o.chibi.length ? '🐾 chibi' : ''].filter(Boolean).join(' · ')
+    const meta = o.elite !== undefined ? o.obtain : [o.line, o.obtain, o.artist && `art: ${o.artist}`].filter(Boolean).join(' · ')
+    return `**${o.name}**${tags ? ` (${tags})` : ''}\n${meta}`
+  })
+  const newest = [...list].filter(o => o.elite === undefined).pop() ?? list[list.length - 1]
+  const e = embed(`${op.name} · Outfits (${list.length})`)
+    .setURL(page)
+    .setDescription(clip(lines.join('\n'), 3800) + `\n\nUse \`/skin operator:${op.name} outfit:<name>\` to see one outfit's art.`)
+    .setImage(outfitArt(op.id, newest))
+    .addFields({ name: 'Animated art and chibis', value: 'Press **▶ Chibi player** below. Myrtle plays them live, and you can download a GIF or WebM there.' })
+    .setFooter({ text: `${FOOTER} · Picture: ${newest.name} · Art © Hypergryph/Yostar, hosted by myrtle.moe` })
+  return e
+}
+
 async function cmdSkin(i: ChatInputCommandInteraction, eph: boolean) {
   ensureData()
   if (!data) return notReady(i, eph)
@@ -2180,19 +2249,7 @@ async function cmdSkin(i: ChatInputCommandInteraction, eph: boolean) {
     e.setFooter({ text: `${FOOTER} · Chibi player on Myrtle: download as GIF/WebM there · Art © Hypergryph/Yostar` })
     return i.editReply({ embeds: [e], components: skinButtons(op, o) })
   }
-  const lines = list.map(o => {
-    const tags = [o.animated ? '✨ animated' : '', o.chibi.length ? '🐾 chibi' : ''].filter(Boolean).join(' · ')
-    const meta = o.elite !== undefined ? o.obtain : [o.line, o.obtain, o.artist && `art: ${o.artist}`].filter(Boolean).join(' · ')
-    return `**${o.name}**${tags ? ` (${tags})` : ''}\n${meta}`
-  })
-  const newest = [...list].filter(o => o.elite === undefined).pop() ?? list[list.length - 1]
-  const e = embed(`${op.name} · Outfits (${list.length})`)
-    .setURL(page)
-    .setDescription(clip(lines.join('\n'), 3800) + `\n\nUse \`/skin operator:${op.name} outfit:<name>\` to see one outfit's art.`)
-    .setImage(outfitArt(op.id, newest))
-    .addFields({ name: 'Animated art and chibis', value: 'Press **▶ Chibi player** below. Myrtle plays them live, and you can download a GIF or WebM there.' })
-    .setFooter({ text: `${FOOTER} · Picture: ${newest.name} · Art © Hypergryph/Yostar, hosted by myrtle.moe` })
-  return i.editReply({ embeds: [e], components: skinButtons(op) })
+  return i.editReply({ embeds: [outfitListEmbed(op, list)], components: skinButtons(op) })
 }
 
 // ───────────────────────── /links /help ─────────────────────────
@@ -2236,7 +2293,7 @@ const HELP: HelpEntry[] = [
     short: 'Operator card: class, faction, tier, modules, art, links',
     usage: '/operator name:<operator>',
     detail:
-      'Shows rarity, class and branch, faction, position, tags, tier (AK Tier List), whether they can be recruited, each module in plain words (what stage 1 changes, its stats, the talent stages 2 and 3 improve, and the DragonGJY rating and recommended stage), E2 art, and links to the wiki, Myrtle, story records and voice lines. The "Module pros and cons" button shows the full DragonGJY notes (recommended level, priority, pros and cons) privately. Names autocomplete as you type. For non-operators (NPCs) it shows a wiki summary and their story appearances.',
+      'Shows a compact card: rarity, class and branch, faction, position, tier (AK Tier List), whether they can be recruited, tags, their modules with a rating, and E2 art. Buttons open the details privately: **Modules** (what each module does in plain words, its stats, and the DragonGJY verdict, with a further button for pros and cons), **Outfits** (like /skin) and **Base skills** (like /base), plus links to the wiki, Myrtle, story records and voice lines. Names autocomplete as you type. For non-operators (NPCs) it shows a wiki summary and their story appearances.',
     examples: ['/operator name: Texas', '/operator name: Wang'],
   },
   {

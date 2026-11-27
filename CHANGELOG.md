@@ -2,10 +2,11 @@
 
 ## Unreleased
 
-- `/operator` is easier to read: no squeezed three-column fields, and each module gets its own
-  full-width section with what it does in plain words (stage 1 trait change, stats, the talent
-  stages 2 and 3 improve, from the EN game data) and the DragonGJY rating and recommended stage
-  spelled out. The "Module pros and cons" button lists pros and cons as bullets.
+- `/operator` is a compact card again: profile, a one-line list of modules with their rating, and
+  buttons for details shown privately. **Modules** explains each module in plain words (stage 1
+  trait change, stats, the talent stages 2 and 3 improve, from the EN game data, plus the DragonGJY
+  verdict), with a further **Community pros and cons** button. **Outfits** and **Base skills** show
+  what `/skin` and `/base` show. Wiki, Myrtle, story and voice links are link buttons.
 - Fewer commands: `/coin` and `/choose` are now `/roll coin` and `/roll choose` (dice is `/roll dice`);
   `/module` became the "Module pros and cons" button on `/operator`; `/links` is `/help command: links`;
   `/voice` is `/music voice`.
