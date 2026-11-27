@@ -2750,6 +2750,8 @@ const fillHelpChoices = () => {
   ;(ARK_COMMANDS.find(c => c.name === 'help') as any).options[0].choices = HELP.slice(0, 25).map(h => ({ name: `/${h.cmd}`, value: h.cmd }))
 }
 fillHelpChoices()
+/** Every /help entry (for the test that keeps /help in step with the commands). */
+export const helpEntries = (): readonly HelpEntry[] => HELP
 /** Other modules add their commands to /help here. */
 export function registerHelp(entries: HelpEntry[]): void {
   const at = HELP.findIndex(h => h.cmd === 'status')

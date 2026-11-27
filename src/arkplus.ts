@@ -1124,6 +1124,62 @@ function charOf(p: Plus, q: string): { id: string; c: CharPlus } | null {
   for (const o of findOps(q, 8)) if (p.chars[o.id]) return { id: o.id, c: p.chars[o.id] }
   return null
 }
+/** /compare as three tabs (`arkp:cmp:<id a>:<id b>:<a|cmp|b>`): operator 1, the side-by-side stats, operator 2. */
+function compareView(p: Plus, ia: string, ib: string, view: string): { embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder>[] } {
+  const a = { id: ia, c: p.chars[ia] },
+    b = { id: ib, c: p.chars[ib] }
+  const footer = `${FOOTER} · Stats at maximum level, highest promotion, no potential, trust or module bonuses · Tier and module grades are fan-made`
+  const who = (x: { c: CharPlus }) => `**${x.c.name}** · ${'★'.repeat(x.c.rarity)} ${x.c.cls} (${findOps(x.c.name, 1)[0]?.branch ?? x.c.branch})`
+  let e: EmbedBuilder
+  if (view === 'a' || view === 'b') {
+    const x = view === 'a' ? a : b
+    const sum = operatorSummary(x.c.name)
+    e = embed(x.c.name)
+      .setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${x.id}.png`)
+      .setDescription(`${who(x)}\n**Tier:** ${sum.tier ?? 'not listed'} *(AK Tier List)*`)
+      .addFields({
+        name: 'Modules',
+        value: clip(sum.modules.length ? sum.modules.map(m => `**${m.type}** ${m.name}${m.grade ? ` · rated ${m.grade}` : ''}`).join('\n') : 'None', 1024),
+      })
+    if (sum.verdict) e.addFields({ name: 'Tier sheet verdict', value: clip(sum.verdict, 1024) })
+    e.addFields({ name: 'More', value: `\`/operator name:${x.c.name}\` for the full operator card.` })
+  } else {
+    const rows: [string, (c: CharPlus) => number, 'high' | 'low', (n: number) => string][] = [
+      ['HP', c => c.hp, 'high', n => n.toLocaleString('en-US')],
+      ['ATK', c => c.atk, 'high', n => n.toLocaleString('en-US')],
+      ['DEF', c => c.def, 'high', n => n.toLocaleString('en-US')],
+      ['RES', c => c.res, 'high', n => String(n)],
+      ['DP cost', c => c.cost, 'low', n => String(n)],
+      ['Block', c => c.block, 'high', n => String(n)],
+      ['Redeploy', c => c.redeploy, 'low', n => `${n}s`],
+      ['Interval', c => c.aspd, 'low', n => `${n}s`],
+    ]
+    const w = 9
+    const lines = [`${''.padEnd(w)}${clip(a.c.name, 14).padEnd(15)}${clip(b.c.name, 14)}`]
+    for (const [label, get, better, f] of rows) {
+      const x = get(a.c),
+        y = get(b.c)
+      const mark = (me: number, other: number) => (me === other ? ' ' : (better === 'high' ? me > other : me < other) ? '▲' : ' ')
+      lines.push(`${label.padEnd(w)}${(f(x) + mark(x, y)).padEnd(15)}${f(y)}${mark(y, x)}`)
+    }
+    const sa = operatorSummary(a.c.name),
+      sb = operatorSummary(b.c.name)
+    lines.push(`${'Tier'.padEnd(w)}${(sa.tier ?? '-').slice(0, 14).padEnd(15)}${(sb.tier ?? '-').slice(0, 14)}`)
+    lines.push(`${'Modules'.padEnd(w)}${String(sa.modules.length).padEnd(15)}${sb.modules.length}`)
+    e = embed(`${a.c.name} vs ${b.c.name}`).setDescription(
+      [who(a), who(b), '```', ...lines, '```', "▲ marks the better value. The operator tabs show modules and the tier sheet's verdict."].join('\n'),
+    )
+  }
+  e.setFooter({ text: footer })
+  const tab = (v: string, label: string) =>
+    new ButtonBuilder()
+      .setCustomId(`arkp:cmp:${ia}:${ib}:${v}`)
+      .setLabel(clip(label, 80))
+      .setStyle(v === view ? ButtonStyle.Primary : ButtonStyle.Secondary)
+      .setDisabled(v === view)
+  return { embeds: [e], components: [new ActionRowBuilder<ButtonBuilder>().addComponents(tab('a', a.c.name), tab('cmp', 'Compare'), tab('b', b.c.name))] }
+}
+
 async function cmdCompare(i: ChatInputCommandInteraction, eph: boolean) {
   const p = await need(i, eph)
   if (!p) return
@@ -1140,40 +1196,7 @@ async function cmdCompare(i: ChatInputCommandInteraction, eph: boolean) {
     })
     return
   }
-  const rows: [string, (c: CharPlus) => number, 'high' | 'low', (n: number) => string][] = [
-    ['HP', c => c.hp, 'high', n => n.toLocaleString('en-US')],
-    ['ATK', c => c.atk, 'high', n => n.toLocaleString('en-US')],
-    ['DEF', c => c.def, 'high', n => n.toLocaleString('en-US')],
-    ['RES', c => c.res, 'high', n => String(n)],
-    ['DP cost', c => c.cost, 'low', n => String(n)],
-    ['Block', c => c.block, 'high', n => String(n)],
-    ['Redeploy', c => c.redeploy, 'low', n => `${n}s`],
-    ['Interval', c => c.aspd, 'low', n => `${n}s`],
-  ]
-  const w = 9
-  const nameA = clip(a.c.name, 14),
-    nameB = clip(b.c.name, 14)
-  const lines = [`${''.padEnd(w)}${nameA.padEnd(15)}${nameB}`]
-  for (const [label, get, better, f] of rows) {
-    const x = get(a.c),
-      y = get(b.c)
-    const mark = (me: number, other: number) => (me === other ? ' ' : (better === 'high' ? me > other : me < other) ? '▲' : ' ')
-    lines.push(`${label.padEnd(w)}${(f(x) + mark(x, y)).padEnd(15)}${f(y)}${mark(y, x)}`)
-  }
-  const who = (x: { c: CharPlus }) => `**${x.c.name}** · ${'★'.repeat(x.c.rarity)} ${x.c.cls} (${findOps(x.c.name, 1)[0]?.branch ?? x.c.branch})`
-  const e = embed(`${a.c.name} vs ${b.c.name}`)
-    .setDescription([who(a), who(b), '```', ...lines, '```', '▲ marks the better value.'].join('\n'))
-    .setFooter({ text: `${FOOTER} · Stats at maximum level, highest promotion, no potential, trust or module bonuses · Tier and module grades are fan-made` })
-  // Beyond raw stats: tier, modules with their community grade, and the tier sheet's verdict.
-  for (const x of [a, b]) {
-    const sum = operatorSummary(x.c.name)
-    const mods = sum.modules.length ? sum.modules.map(m => `${m.type}${m.grade ? ` (${m.grade})` : ''}`).join(' · ') : 'none'
-    e.addFields({
-      name: x.c.name,
-      value: clip([`**Tier:** ${sum.tier ?? 'not listed'}`, `**Modules:** ${mods}`, sum.verdict ? `**Verdict:** ${clip(sum.verdict, 300)}` : ''].filter(Boolean).join('\n'), 1024),
-    })
-  }
-  await i.reply({ embeds: [e], flags: ephFlag(eph) })
+  await i.reply({ ...compareView(p, a.id, b.id, 'cmp'), flags: ephFlag(eph) })
 }
 
 // ───────────────────────── /materials ─────────────────────────
@@ -1291,6 +1314,16 @@ async function cmdMaterials(i: ChatInputCommandInteraction, eph: boolean) {
 /** Buttons from /materials and the /operator card. A private reply is switched in place; a public one answers privately. */
 export async function handleArkPlusButton(i: ButtonInteraction): Promise<void> {
   ensurePlus()
+  const cmp = /^arkp:cmp:([^:]+):([^:]+):(a|cmp|b)$/.exec(i.customId)
+  if (cmp) {
+    if (!plus?.chars[cmp[1]] || !plus.chars[cmp[2]]) {
+      await i.reply({ content: '[PRTS] That record is not available right now. Please try again shortly. I apologize.', flags: MessageFlags.Ephemeral })
+      return
+    }
+    // Tabs switch the same message, like page buttons.
+    await i.update(stampEmbeds(compareView(plus, cmp[1], cmp[2], cmp[3]), SECTION.compare) as ReturnType<typeof compareView>)
+    return
+  }
   const pic = /^arkp:(?:enemy|enpic):([^:]+)/.exec(i.customId)
   if (pic) {
     const e = plus?.enemies?.[pic[1]]
