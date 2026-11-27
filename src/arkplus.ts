@@ -848,6 +848,10 @@ async function infoboxOf(page: string): Promise<{ title: string; box: ReturnType
 }
 
 type EnemyWiki = { enemyPage?: string; character?: string; portrait?: string }
+/** Portraits the wiki cannot tell apart (checked by hand): enemy id -> infobox image file. */
+const PORTRAIT_OVERRIDE: Record<string, string> = {
+  enemy_2078_skzmst: 'Mon3tr original.png', // Mon2tr is Mon3tr's original form, not the humanoid operator art
+}
 const enemyWikiCache = new Map<string, { at: number; value: EnemyWiki }>()
 
 /** The character an enemy page is about: "Talulah/Ally" -> Talulah, or the link in the bold lead
@@ -878,7 +882,8 @@ async function enemyWiki(e: Enemy): Promise<EnemyWiki> {
       if (ch) {
         let box = await infoboxOf(ch.page)
         if (box?.box?.kind === 'operator') box = (await infoboxOf(`${box.title}/Story`).catch(() => null)) ?? box
-        const pick = box?.box ? pickPortrait(box.box.images, [e.name.replace(/^'|'$/g, ''), ch.page], ch.hint) : undefined
+        const forced = box?.box?.images.find(x => x.file === PORTRAIT_OVERRIDE[e.id])
+        const pick = forced ?? (box?.box ? pickPortrait(box.box.images, [e.name.replace(/^'|'$/g, ''), ch.page], ch.hint) : undefined)
         if (box && pick) {
           const info = await wikiApi({ action: 'query', titles: `File:${pick.file}`, prop: 'imageinfo', iiprop: 'url' })
           value.portrait = Object.values<any>(info?.query?.pages ?? {})[0]?.imageinfo?.[0]?.url
