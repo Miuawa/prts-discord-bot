@@ -32,6 +32,7 @@ import {
   type GuildMember,
   type Message,
 } from 'discord.js'
+import { linePages, paged } from './pages.ts'
 import { handleVoice, handleVoiceAutocomplete } from './voice.ts'
 import { spawn, type ChildProcess } from 'child_process'
 import { findLyrics, type LyricsQuery } from './lyrics.ts'
@@ -803,26 +804,20 @@ function shuffle<T>(a: T[]) {
 }
 
 // Shown only on request (/music queue or the Queue button), never posted on its own.
-function queueReply(st?: GuildState): { content?: string; embeds?: EmbedBuilder[] } {
+function queueReply(st?: GuildState): { content?: string; embeds?: EmbedBuilder[]; components?: any[] } {
   if (!st?.current) return { content: '[PRTS] No playback in progress. The queue is empty.' }
-  const lines = st.queue.slice(0, 15).map((t, n) => `\`${String(n + 1).padStart(2, '0')}\` ${link(t.title, t.url, 60)}${t.requester ? ` · ${short(t.requester, 20)}` : ''} · \`${len(t)}\``)
+  const lines = st.queue.map((t, n) => `\`${String(n + 1).padStart(2, '0')}\` ${link(t.title, t.url, 60)}${t.requester ? ` · ${short(t.requester, 20)}` : ''} · \`${len(t)}\``)
   const total = st.queue.reduce((s, t) => s + (t.duration ?? 0), 0)
-  const e = new EmbedBuilder()
-    .setColor(COLOR.playing)
-    .setAuthor({ name: AUTHOR })
-    .setTitle(`Playback queue${st.loop === 'track' ? '  ·  🔂 track loop' : st.loop === 'queue' ? '  ·  🔁 playlist loop' : ''}`)
-    .setDescription(
-      [
-        `▶ **${link(st.current.title, st.current.url, 70)}** · \`${len(st.current)}\``,
-        '',
-        lines.length ? lines.join('\n') : '_Nothing queued after this._',
-        st.queue.length > 15 ? `…and ${st.queue.length - 15} more.` : '',
-      ]
-        .filter((l, n) => l !== '' || n === 1)
-        .join('\n'),
-    )
-    .setFooter({ text: st.queue.length ? `${st.queue.length} waiting · about ${fmt(total)} remaining` : FOOTER })
-  return { embeds: [e] }
+  const head = `▶ **${link(st.current.title, st.current.url, 70)}** · \`${len(st.current)}\`\n\n`
+  const make = (body: string, k: number, n: number) =>
+    new EmbedBuilder()
+      .setColor(COLOR.playing)
+      .setAuthor({ name: AUTHOR })
+      .setTitle(`Playback queue${st.loop === 'track' ? '  ·  🔂 track loop' : st.loop === 'queue' ? '  ·  🔁 playlist loop' : ''}`)
+      .setDescription(head + (body || '_Nothing queued after this._'))
+      .setFooter({ text: st.queue.length ? `${st.queue.length} waiting · about ${fmt(total)} remaining${n > 1 ? ` · page ${k + 1} of ${n}` : ''}` : FOOTER })
+  // Fifteen songs a page; the page buttons switch the same message.
+  return paged(lines.length ? linePages(lines, make, 3500, 15) : [make('', 0, 1)])
 }
 
 // ---------- lyrics ----------
@@ -920,8 +915,18 @@ export async function handleMusic(i: ChatInputCommandInteraction): Promise<void>
       const f = i.options.getString('filter')
       let songs = listSongs()
       if (f) songs = songs.filter(s => norm(relative(MUSIC_DIR, s)).includes(norm(f)))
-      const body = songs.length ? songs.map((s, n) => `\`${String(n + 1).padStart(2, '0')}\` ${fileTitle(s)}`).join('\n') : '_No audio files found in the music folder._'
-      await i.reply({ content: clip(`**[PRTS] Music archive** · ${songs.length} file(s)\n${body}`), flags: MessageFlags.Ephemeral })
+      // The music folder is the bot owner's own collection of audio files on the PC that runs PRTS.
+      const about =
+        'These are audio files stored on the computer that runs PRTS, in its music folder (the owner adds them). Play one with `/music play song:<name>`; anyone can also play YouTube links or upload a file with `/music play file:`.'
+      const lines = songs.map((s, n) => `\`${String(n + 1).padStart(3, '0')}\` ${fileTitle(s)}`)
+      const make = (body: string, k: number, n: number) =>
+        new EmbedBuilder()
+          .setColor(COLOR.playing)
+          .setAuthor({ name: AUTHOR })
+          .setTitle(`Music archive · ${songs.length} file${songs.length === 1 ? '' : 's'}${f ? ` matching "${short(f, 30)}"` : ''}`)
+          .setDescription(`${about}\n\n${body || '_No audio files found in the music folder._'}`)
+          .setFooter({ text: `${FOOTER}${n > 1 ? ` · page ${k + 1} of ${n}` : ''}` })
+      await i.reply({ ...paged(lines.length ? linePages(lines, make, 3000, 25) : [make('', 0, 1)]), flags: MessageFlags.Ephemeral })
       return
     }
     case 'lyrics': {

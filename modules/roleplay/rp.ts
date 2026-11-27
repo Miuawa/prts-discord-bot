@@ -22,7 +22,7 @@ const OWNERS = (process.env.RP_OWNER_IDS ?? '')
   .split(',')
   .map(s => s.trim())
   .filter(Boolean)
-const COLOR = { info: 0x23b7e5, ok: 0x3fb950, warn: 0xf2a33a, dim: 0x5c6670 }
+const COLOR = { info: 0x23b7e5, ok: 0x23b7e5, warn: 0xf2a33a, dim: 0x5c6670 }
 const FOOTER = 'Primitive Rhodes Island Terminal Service'
 
 type RpChannel = { name: string; guildId: string | null; guildName: string | null; setBy: string; setAt: string; paused?: boolean; nudgeMin?: number }

@@ -25,6 +25,7 @@
 // Must stay the first import: it loads .env files before the other modules read process.env.
 import { ENV_FILE, REPO_ENV_FILE } from './env.ts'
 import {
+  EmbedBuilder,
   Client,
   GatewayIntentBits,
   Partials,
@@ -45,6 +46,7 @@ import { randomBytes } from 'crypto'
 import { MUSIC_COMMAND, handleMusic, handleMusicButton, handleMusicSelect, handleMusicAutocomplete } from './music.ts'
 import { FRAME_CHARS, SECTION, brand, frameChunks } from './theme.ts'
 import { visit } from './visits.ts'
+import { handlePageButton } from './pages.ts'
 import { ARK_COMMANDS, ARK_COMMAND_NAMES, handleArk, handleArkAutocomplete, handleArkButton, handleArkSelect, registerHelp, startStoryRefresh } from './ark.ts'
 import { ARKPLUS_COMMANDS, ARKPLUS_NAMES, handleArkPlus, handleArkPlusAutocomplete, handleArkPlusButton, startAnnouncements, startReminders } from './arkplus.ts'
 import { readAiConfig, aiAvailable, apiBackendFor, describeBackend, type AiConfig } from './ai/config.ts'
@@ -1213,6 +1215,10 @@ client.on('interactionCreate', async (interaction: Interaction) => {
     return
   }
   if (!interaction.isButton()) return
+  if (interaction.customId.startsWith('page:')) {
+    await handlePageButton(interaction).catch(e => process.stderr.write(`discord: page button failed: ${e}\n`))
+    return
+  }
   if (interaction.customId.startsWith('arkp:')) {
     if (await denyUnlisted(interaction)) return
     await handleArkPlusButton(interaction).catch(e => process.stderr.write(`discord: arkplus button failed: ${e}\n`))
@@ -1352,33 +1358,38 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
   const waiting = [...slashChats.values()].filter(s => !s.answered).length
   const online = aiOnline()
   const started = online ? await narratorStartedAt() : null
-  const lines = [
-    '-# Activating Self-verification program...',
-    '[PRTS] System status report.',
-    '**Discord bot** (instant commands, `/roll`, `/myrtle` and so on)',
-    '• Status: operational',
-    `• Running for: ${fmtSpan(Date.now() - botStartedAt)} (started ${rel(botStartedAt)})`,
-    '',
-    '**Claude Code narrator** (bridge)',
-    online ? `• Status: connected${started ? `, running for ${fmtSpan(Date.now() - started)} (started ${rel(started)})` : ''}, since ${rel(bridgeSince)}` : '• Status: not connected',
-    '',
-    '**AI answers**',
-    ...(await Promise.all(
-      [{ name: '/prts', cfg: CORE_AI }, ...MODULES.filter(m => m.ai).map(m => ({ name: `${m.name} module`, cfg: m.ai! }))].map(async ({ name, cfg }) => {
-        const api = apiBackendFor(cfg, online)
-        const now = api ? `${api} (${await probe(api, cfg)})` : online ? 'Claude Code narrator' : '**nobody** (narrator offline)'
-        return `• ${name}: ${describeBackend(cfg)}. Now: ${now}`
-      }),
-    )),
-    `• Last reply: ${lastAnyReplyAt ? rel(lastAnyReplyAt) : 'none since the bot started'}`,
-    `• Requests awaiting an answer: ${waiting}`,
-    '',
-    online || CORE_AI.backend !== 'claude-code'
-      ? 'Verified. System logic is functioning correctly. All systems operational.'
-      : 'Verification complete. The narrative core is not responding; instant functions remain operational.',
-    'Is there anything else? I am always happy to help.',
-  ].filter((l, i, a) => !(l === '' && a[i - 1] === ''))
-  await interaction.editReply({ content: lines.join('\n') })
+  // One line per distinct AI route: /prts and the roleplay module usually share one, so it is listed once.
+  const name = (cfg: typeof CORE_AI) => (b: ReturnType<typeof apiBackendFor> & string) => (b === 'anthropic' ? 'Anthropic API' : (cfg.label ?? 'local model'))
+  const routes = new Map<string, string[]>()
+  for (const { who, cfg } of [{ who: '/prts', cfg: CORE_AI }, ...MODULES.filter(m => m.ai).map(m => ({ who: m.name, cfg: m.ai! }))]) {
+    const api = apiBackendFor(cfg, online)
+    const check = api ? await probe(api, cfg) : ''
+    const reachable = /reachable|key set/.test(check) && !/not reachable|no API key/.test(check)
+    const now = api ? `${name(cfg)(api)} (${reachable ? 'reachable' : 'not reachable'})` : online ? 'Claude narrator' : 'nobody (narrator offline)'
+    const backup = cfg.backend === 'auto' ? ` · backup: ${name(cfg)(cfg.fallback)}` : ''
+    const line = `answering now: **${now}**${backup}`
+    routes.set(line, [...(routes.get(line) ?? []), who])
+  }
+  const ok = online || CORE_AI.backend !== 'claude-code'
+  const e = new EmbedBuilder()
+    .setColor(ok ? 0x23b7e5 : 0xf2a33a)
+    .setTitle('System status report')
+    .setDescription(
+      ok
+        ? 'Self-verification complete. System logic is functioning correctly. All systems operational.'
+        : 'Self-verification complete. The narrative core is not responding; instant functions remain operational.',
+    )
+    .addFields(
+      { name: 'Terminal (instant commands)', value: `Operational · uptime ${fmtSpan(Date.now() - botStartedAt)}` },
+      {
+        name: 'Narrative core',
+        value: online ? `Online${started ? ` · uptime ${fmtSpan(Date.now() - started)}` : ''}` : 'Offline',
+      },
+      { name: 'AI answers', value: [...routes].map(([line, who]) => `${who.join(' and ')}: ${line}`).join('\n') },
+      { name: 'Activity', value: `Last reply ${lastAnyReplyAt ? rel(lastAnyReplyAt) : 'none since start-up'} · ${waiting} request${waiting === 1 ? '' : 's'} awaiting an answer` },
+    )
+    .setFooter({ text: 'Primitive Rhodes Island Terminal Service · Is there anything else? I am always happy to help.' })
+  await interaction.editReply({ embeds: [e] })
 }
 
 async function handleInbound(msg: Message): Promise<void> {

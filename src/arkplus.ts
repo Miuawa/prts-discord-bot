@@ -1298,25 +1298,38 @@ async function cmdRemind(i: ChatInputCommandInteraction) {
   if (sub === 'add') {
     const secs = parseDuration(i.options.getString('in', true))
     if (!secs) {
-      await i.reply({ content: '[PRTS] I could not read that time. Please use something like `30m`, `2h` or `1d12h` (at least 10 seconds). I apologize.', flags: MessageFlags.Ephemeral })
+      await i.reply({
+        embeds: [embed('Request declined').setColor(COLOR.warn).setDescription('Unable to read that time. Please use a form such as `30m`, `2h` or `1d12h` (10 seconds at least).')],
+        flags: MessageFlags.Ephemeral,
+      })
       return
     }
     if (secs > 60 * 86400) {
-      await i.reply({ content: '[PRTS] Reminders can be set up to 60 days ahead. I apologize for the limitation.', flags: MessageFlags.Ephemeral })
+      await i.reply({
+        embeds: [embed('Request declined').setColor(COLOR.warn).setDescription('Reminders can be scheduled up to 60 days ahead. I apologize for the limitation.')],
+        flags: MessageFlags.Ephemeral,
+      })
       return
     }
     if (mine.length >= 25) {
-      await i.reply({ content: '[PRTS] You already have 25 pending reminders. Please cancel one with `/remind cancel`.', flags: MessageFlags.Ephemeral })
+      await i.reply({
+        embeds: [embed('Request declined').setColor(COLOR.warn).setDescription('Storage limit reached: 25 pending reminders. Please cancel one with `/remind cancel`.')],
+        flags: MessageFlags.Ephemeral,
+      })
       return
     }
-    const r: Reminder = { id: store.next++, userId: i.user.id, channelId: i.channelId ?? undefined, at: Date.now() + secs * 1000, text: i.options.getString('message', true) }
+    // Numbers are reused: the lowest one not taken by a pending reminder, so they start again from 1 when none are pending.
+    const used = new Set(store.items.map(x => x.id))
+    let id = 1
+    while (used.has(id)) id++
+    const r: Reminder = { id, userId: i.user.id, channelId: i.channelId ?? undefined, at: Date.now() + secs * 1000, text: i.options.getString('message', true) }
     store.items.push(r)
     saveReminders(store)
     await i.reply({
       embeds: [
-        embed('Reminder registered. Real-time logging activated.')
-          .setColor(COLOR.ok)
-          .setDescription(`**#${r.id}** · <t:${Math.floor(r.at / 1000)}:R> (<t:${Math.floor(r.at / 1000)}:f>)\n${clip(r.text, 300)}`),
+        embed('Reminder registered')
+          .setDescription(`Understood. I will remind you <t:${Math.floor(r.at / 1000)}:R>, at <t:${Math.floor(r.at / 1000)}:f>.\n> ${clip(r.text, 300)}`)
+          .setFooter({ text: `${FOOTER} · Reminder #${r.id} · cancel with /remind cancel id:${r.id}` }),
       ],
       flags: MessageFlags.Ephemeral,
     })
@@ -1324,18 +1337,28 @@ async function cmdRemind(i: ChatInputCommandInteraction) {
   }
   if (sub === 'list') {
     const lines = mine.map(r => `**#${r.id}** · <t:${Math.floor(r.at / 1000)}:R> · ${clip(r.text, 80)}`)
-    await i.reply({ embeds: [embed('Your reminders').setDescription(lines.join('\n') || 'No pending reminders on file.')], flags: MessageFlags.Ephemeral })
+    await i.reply({
+      embeds: [
+        embed('Pending reminders').setDescription(
+          lines.length ? `${lines.length} reminder${lines.length > 1 ? 's' : ''} on file.\n\n${lines.join('\n')}` : 'No pending reminders on file. Use `/remind add` to schedule one.',
+        ),
+      ],
+      flags: MessageFlags.Ephemeral,
+    })
     return
   }
   const id = i.options.getInteger('id', true)
   const r = mine.find(x => x.id === id)
   if (!r) {
-    await i.reply({ content: `[PRTS] No pending reminder #${id} of yours. See \`/remind list\`.`, flags: MessageFlags.Ephemeral })
+    await i.reply({
+      embeds: [embed('Request declined').setColor(COLOR.warn).setDescription(`No pending reminder #${id} on file under your name. Please check \`/remind list\`.`)],
+      flags: MessageFlags.Ephemeral,
+    })
     return
   }
   store.items = store.items.filter(x => x !== r)
   saveReminders(store)
-  await i.reply({ content: `[PRTS] Reminder #${id} cancelled. The record has been deleted.`, flags: MessageFlags.Ephemeral })
+  await i.reply({ embeds: [embed('Reminder cancelled').setDescription(`Understood. Reminder #${id} has been deleted.\n> ${clip(r.text, 300)}`)], flags: MessageFlags.Ephemeral })
 }
 
 /** Delivers due reminders: in the channel where they were set, or by DM when that fails. */
@@ -1348,13 +1371,22 @@ export function startReminders(client: Client): void {
     saveReminders(store)
     for (const r of due) {
       const late = Date.now() - r.at > 120_000
-      const text = `\`[PRTS]\` ⏰ <@${r.userId}> Scheduled reminder: ${r.text}${late ? ' _(delivered late. I apologize: the system was offline.)_' : ''}`
+      const card = stampEmbeds(
+        {
+          embeds: [
+            embed('Scheduled reminder')
+              .setDescription(`> ${clip(r.text, 1500)}${late ? '\n\nDelivered late: the system was offline at the scheduled time. I apologize.' : ''}`)
+              .setFooter({ text: `${FOOTER} · Reminder #${r.id}` }),
+          ],
+        },
+        SECTION.remind,
+      ) as { embeds: EmbedBuilder[] }
       let sent = false
       if (r.channelId) {
         try {
           const ch = await client.channels.fetch(r.channelId)
           if (ch && 'send' in ch) {
-            await ch.send({ content: text, allowedMentions: { users: [r.userId] } })
+            await ch.send({ content: `<@${r.userId}>`, ...card, allowedMentions: { users: [r.userId] } })
             sent = true
           }
         } catch {}
@@ -1362,7 +1394,7 @@ export function startReminders(client: Client): void {
       if (!sent) {
         try {
           const u = await client.users.fetch(r.userId)
-          await u.send(`[PRTS] ⏰ Scheduled reminder: ${r.text}${late ? ' (delivered late. I apologize: the system was offline.)' : ''}`)
+          await u.send(card)
         } catch (err) {
           log(`reminder #${r.id} could not be delivered: ${err}`)
         }

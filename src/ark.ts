@@ -35,6 +35,7 @@ import { join } from 'path'
 const SHEETS = join(DATA_DIR, 'sheets')
 const STORIES_JSON = process.env.PRTS_STORIES_JSON ?? join(DATA_DIR, 'stories.json')
 import { COLOR, FOOTER, SECTION, brand, stampEmbeds } from './theme.ts'
+import { linePages, paged } from './pages.ts'
 import { CACHE_DIR, DATA_DIR } from './paths.ts'
 import { announce } from './announce.ts'
 import { type ModuleEffect, fillTemplate, parseModule, statLine, gradeWord, recLevel } from './equip.ts'
@@ -62,9 +63,9 @@ export const ARK_COMMANDS = [
       {
         type: 1,
         name: 'dice',
-        description: 'Roll dice, e.g. 1d20, 2d6+3, 4d6kh3, d%',
+        description: 'Roll dice: 1d20 = one 20-sided die, 2d6+3 = two 6-sided dice plus 3',
         options: [
-          { type: 3, name: 'dice', description: 'Dice expression (default 1d20)', required: false, max_length: 100 },
+          { type: 3, name: 'dice', description: '1d20, 2d6+3, 4d6kh3 (keep highest 3), 2d20kl1 (keep lowest), d% (1-100)', required: false, max_length: 100 },
           { type: 3, name: 'reason', description: 'What the roll is for', required: false, max_length: 100 },
           PRIVATE_OPT,
         ],
@@ -75,6 +76,7 @@ export const ARK_COMMANDS = [
         description: 'Toss a coin (or several)',
         options: [
           { type: 4, name: 'count', description: 'How many coins (default 1, max 100)', required: false, min_value: 1, max_value: 100 },
+          { type: 3, name: 'reason', description: 'What the toss is for', required: false, max_length: 100 },
           {
             type: 3,
             name: 'call',
@@ -92,7 +94,11 @@ export const ARK_COMMANDS = [
         type: 1,
         name: 'choose',
         description: 'PRTS picks one option for you',
-        options: [{ type: 3, name: 'options', description: 'Options separated by | or commas', required: true, max_length: 500 }, PRIVATE_OPT],
+        options: [
+          { type: 3, name: 'options', description: 'Options separated by | or commas', required: true, max_length: 500 },
+          { type: 3, name: 'reason', description: 'What the choice is for', required: false, max_length: 100 },
+          PRIVATE_OPT,
+        ],
       },
     ],
   },
@@ -131,7 +137,7 @@ export const ARK_COMMANDS = [
   {
     name: 'recruit',
     description: 'Recruitment calculator: which tag combos guarantee good operators',
-    options: [...[1, 2, 3, 4, 5].map(i => ({ type: 3, name: `tag${i}`, description: `Tag ${i}`, required: i === 1, autocomplete: true, max_length: 40 })), PRIVATE_OPT],
+    options: [{ type: 3, name: 'tags', description: 'Up to 5 tags, separated by commas, e.g. Slow, Top Operator', required: true, autocomplete: true, max_length: 150 }, PRIVATE_OPT],
   },
   { name: 'wiki', description: 'Search arknights.wiki.gg', options: [{ type: 3, name: 'query', description: 'What to look up', required: true, autocomplete: true, max_length: 150 }, PRIVATE_OPT] },
   {
@@ -239,7 +245,7 @@ export const ARK_COMMANDS = [
         options: [
           { type: 3, name: 'player', description: 'Name, Name#1234, UID or myrtle.moe link (default: your linked account)', required: false, autocomplete: true, max_length: 100 },
           { type: 6, name: 'user', description: 'A Discord user who linked their account', required: false },
-          { type: 3, name: 'item', description: 'Only items whose name contains this', required: false, max_length: 60 },
+          { type: 3, name: 'item', description: 'Only items whose name contains this', required: false, max_length: 60, autocomplete: true },
           PRIVATE_OPT,
         ],
       },
@@ -1002,8 +1008,28 @@ async function cmdRoll(i: ChatInputCommandInteraction, eph: boolean) {
   const reason = i.options.getString('reason')
   const r = rollDice(expr)
   if (typeof r === 'string') return i.reply({ content: `[PRTS] ${r}`, flags: MessageFlags.Ephemeral })
-  const e = embed(`🎲 ${reason ? clip(reason, 200) : 'Dice roll'}`).setDescription(`\`${expr}\`\n${clip(r.text, 3500)}\n\nResult: **${r.total}**`)
+  const e = embed(reason ? clip(reason, 200) : 'Dice roll')
+    .setDescription(`Result: **${r.total}**\n\n\`${expr}\` · ${clip(r.text, 3400)}`)
+    .addFields({ name: 'What this roll means', value: clip(diceExplain(expr), 1024) })
   return i.reply({ embeds: [e], flags: ephFlag(eph) })
+}
+
+/** "2d6+3" -> "2 six-sided dice, added together, plus 3" — so the notation is understandable at a glance. */
+function diceExplain(expr: string): string {
+  const parts: string[] = []
+  const re = /([+-]?)\s*(?:(\d*)d(\d+|%)(?:(kh|kl)(\d+))?|(\d+))/gi
+  for (const m of expr.replace(/\s+/g, '').matchAll(re)) {
+    const sign = m[1] === '-' ? 'minus ' : parts.length ? 'plus ' : ''
+    if (m[6] !== undefined) {
+      parts.push(`${sign}${m[6]}`)
+      continue
+    }
+    const n = Number(m[2] || 1)
+    const sides = m[3] === '%' ? 'percentile (1-100)' : `${m[3]}-sided`
+    const keep = m[4] ? `, keep the ${m[4] === 'kh' ? 'highest' : 'lowest'} ${m[5]}` : ''
+    parts.push(`${sign}${n} ${sides} ${n === 1 ? 'die' : 'dice'}${keep}`)
+  }
+  return `${parts.join(', ')}.\nNotation: **XdY** = X dice with Y sides · **+N** adds N · **khN / klN** keeps the highest / lowest N dice · **d%** = 1 to 100.`
 }
 
 async function cmdCoin(i: ChatInputCommandInteraction, eph: boolean) {
@@ -1019,7 +1045,8 @@ async function cmdCoin(i: ChatInputCommandInteraction, eph: boolean) {
     desc = `${flips.map(f => (f === 'Heads' ? 'H' : 'T')).join(' ')}\n\nHeads: **${heads}** · Tails: **${n - heads}** (${((heads / n) * 100).toFixed(1)}% heads)`
     if (call) desc += `\nYour call (${call}) was correct ${call === 'heads' ? heads : n - heads} of ${n} times.`
   }
-  return i.reply({ embeds: [embed(`🪙 Coin toss${n > 1 ? ` ×${n}` : ''}`).setDescription(desc)], flags: ephFlag(eph) })
+  const reason = i.options.getString('reason')
+  return i.reply({ embeds: [embed(`${reason ? clip(reason, 200) : 'Coin toss'}${n > 1 ? ` ×${n}` : ''}`).setDescription(desc)], flags: ephFlag(eph) })
 }
 
 async function cmdChoose(i: ChatInputCommandInteraction, eph: boolean) {
@@ -1030,7 +1057,8 @@ async function cmdChoose(i: ChatInputCommandInteraction, eph: boolean) {
     .filter(Boolean)
   if (opts.length < 2) return i.reply({ content: '[PRTS] Please provide at least two options, separated by | or commas.', flags: MessageFlags.Ephemeral })
   const pick = opts[randInt(opts.length)]
-  const e = embed('Decision support').setDescription(
+  const reason = i.options.getString('reason')
+  const e = embed(reason ? clip(reason, 200) : 'Decision support').setDescription(
     `Options evaluated: ${opts.length}. Probability for each option: ${(100 / opts.length).toFixed(2)}%.\n\nSelected, without hesitation: **${clip(pick, 500)}**`,
   )
   return i.reply({ embeds: [e], flags: ephFlag(eph) })
@@ -1352,13 +1380,15 @@ async function cmdRecruit(i: ChatInputCommandInteraction, eph: boolean) {
   if (!data) return notReady(i, eph)
   const known = new Map(data.recruitTags.map(t => [normName(t), t]))
   const chosen: string[] = []
-  for (const k of [1, 2, 3, 4, 5]) {
-    const v = i.options.getString(`tag${k}`)
-    if (!v) continue
+  for (const v of (i.options.getString('tags') ?? '')
+    .split(/[,;|]/)
+    .map(x => x.trim())
+    .filter(Boolean)) {
     const t = known.get(normName(v))
-    if (!t) return i.reply({ content: `[PRTS] "${clip(v, 40)}" is not a recruitment tag. Please pick from the suggestions.`, flags: MessageFlags.Ephemeral })
+    if (!t) return i.reply({ content: `[PRTS] "${clip(v, 40)}" is not a recruitment tag. Please separate tags with commas and pick from the suggestions.`, flags: MessageFlags.Ephemeral })
     if (!chosen.includes(t)) chosen.push(t)
   }
+  if (chosen.length > 5) return i.reply({ content: '[PRTS] Recruitment shows five tags at most. Please enter up to five.', flags: MessageFlags.Ephemeral })
   const pool = data.ops.filter(o => o.recruit).map(o => ({ o, tags: opRecruitTags(o) }))
   const combos: { tags: string[]; ops: Op[]; min: number }[] = []
   const n = chosen.length
@@ -1956,20 +1986,19 @@ async function cmdMyrtle(i: ChatInputCommandInteraction, eph: boolean) {
       .filter(x => x.q > 0 && (!q || x.name.toLowerCase().includes(q)))
       .sort((a, b) => b.r - a.r || b.sort - a.sort || b.q - a.q)
     if (!rows.length) return fail(i, `No item in ${tag(u)}'s inventory matches "${clip(q, 60)}".`)
-    const shown: string[] = []
-    let len = 0
-    for (const x of rows) {
-      const l = `${'★'.repeat(Math.min(x.r, 6))} ${x.name} **×${num(x.q)}**`
-      if (len + l.length > 3800 || shown.length >= 70) break
-      shown.push(l)
-      len += l.length + 1
-    }
-    const e = embed(`${tag(u)} · Inventory`)
-      .setURL(`${myrtleUrl(u.uid)}?tab=inventory`)
-      .setThumbnail(myrtleAvatar(u.avatar_id))
-      .setDescription(shown.join('\n'))
-      .setFooter({ text: `${FOOTER} · Showing ${shown.length} of ${rows.length}${q ? ' (filtered)' : ''} · Data from myrtle.moe` })
-    return i.editReply({ embeds: [e] })
+    const lines = rows.map(x => `${'★'.repeat(Math.min(x.r, 6))} ${x.name} **×${num(x.q)}**`)
+    const pages = linePages(
+      lines,
+      (body, k, n) =>
+        embed(`${tag(u)} · Inventory`)
+          .setURL(`${myrtleUrl(u.uid)}?tab=inventory`)
+          .setThumbnail(myrtleAvatar(u.avatar_id))
+          .setDescription(body)
+          .setFooter({ text: `${FOOTER} · ${rows.length} items${q ? ' (filtered)' : ''} · page ${k + 1} of ${n} · Data from myrtle.moe` }),
+      3000,
+      25,
+    )
+    return i.editReply(paged(pages))
   }
 
   if (sub === 'lookback') {
@@ -2419,10 +2448,10 @@ const HELP: HelpEntry[] = [
     cmd: 'recruit',
     group: 'Arknights records',
     short: 'Recruitment tag calculator',
-    usage: '/recruit tag1:<tag> [tag2] [tag3] [tag4] [tag5]',
+    usage: '/recruit tags:<tag, tag, ...>',
     detail:
-      'Enter the tags shown in your recruitment slot (they autocomplete). PRTS lists every tag combination that guarantees a 4★ or better operator, assuming a 9:00:00 timer, plus 1★ Robot combos. If nothing is guaranteed, it says so.',
-    examples: ['/recruit tag1: Crowd-Control tag2: Melee', '/recruit tag1: Top Operator tag2: Defender'],
+      'Enter the tags shown in your recruitment slot, separated by commas (each one autocompletes as you type). PRTS lists every tag combination that guarantees a 4★ or better operator, assuming a 9:00:00 timer, plus 1★ Robot combos. If nothing is guaranteed, it says so.',
+    examples: ['/recruit tags: Crowd-Control, Melee', '/recruit tags: Top Operator, Defender, Slow'],
   },
   {
     cmd: 'base',
@@ -2695,6 +2724,19 @@ export async function handleArkAutocomplete(i: AutocompleteInteraction): Promise
         .filter(([k]) => !n || k.includes(n))
         .slice(0, 25)
         .map(x => x[1])
+  } else if (i.commandName === 'myrtle' && f.name === 'item') {
+    // The item table loads once a day; until it is in memory, suggest nothing rather than wait.
+    const n = q.trim().toLowerCase()
+    const items = itemTable?.items
+    if (!items) void getItems().catch(() => {})
+    const seen = new Set<string>()
+    for (const it of Object.values<any>(items ?? {})) {
+      const name = String(it?.name ?? '')
+      if (!name || seen.has(name) || (n && !name.toLowerCase().includes(n))) continue
+      seen.add(name)
+      choices.push({ name: clip(name, 100), value: clip(name, 60) })
+      if (choices.length >= 25) break
+    }
   } else if (f.name === 'material') {
     const sh = loadSheets()
     const n = normName(q)
@@ -2703,17 +2745,20 @@ export async function handleArkAutocomplete(i: AutocompleteInteraction): Promise
         .filter(([k]) => !n || k.includes(n))
         .slice(0, 25)
         .map(x => x[1])
-  } else if (f.name.startsWith('tag')) {
-    const n = normName(q)
-    const taken = new Set<string>()
-    for (let k = 1; k <= 5; k++) {
-      const v = i.options.getString(`tag${k}`)
-      if (v) taken.add(normName(v))
-    }
-    choices = recruitTagKeys()
-      .filter(([k]) => (!n || k.includes(n)) && (k === n || !taken.has(k)))
-      .slice(0, 25)
-      .map(([, t]) => ({ name: t, value: t }))
+  } else if (f.name === 'tags') {
+    // Comma-separated: complete the last tag, keep the ones already typed.
+    const parts = q.split(',')
+    const last = normName(parts.pop() ?? '')
+    const done = parts.map(x => x.trim()).filter(Boolean)
+    const taken = new Set(done.map(normName))
+    const prefix = done.length ? `${done.join(', ')}, ` : ''
+    choices =
+      done.length >= 5
+        ? []
+        : recruitTagKeys()
+            .filter(([k]) => (!last || k.includes(last)) && !taken.has(k))
+            .slice(0, 25)
+            .map(([, t]) => ({ name: clip(prefix + t, 100), value: clip(prefix + t, 150) }))
   } else if (f.name === 'outfit' && i.commandName === 'skin') {
     const op = findOps(i.options.getString('operator') ?? '', 1)[0]
     if (op) {

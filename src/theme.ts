@@ -3,7 +3,8 @@
 // "PRTS · Audio Playback Module".
 import { EmbedBuilder } from 'discord.js'
 
-export const COLOR = { info: 0x23b7e5, ok: 0x3fb950, warn: 0xf2a33a, dim: 0x5c6670 }
+// PRTS cyan for every normal reply (success included); amber only for warnings and errors, grey for empty states.
+export const COLOR = { info: 0x23b7e5, ok: 0x23b7e5, warn: 0xf2a33a, dim: 0x5c6670 }
 export const FOOTER = 'Primitive Rhodes Island Terminal Service'
 
 /** The PRTS module each command and button answers as. */
