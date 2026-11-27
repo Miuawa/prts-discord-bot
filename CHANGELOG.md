@@ -1,52 +1,48 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-11-28)
 
-- `/enemy` looks at the enemy's story tab first ('Amiya', Furnace's Finale/Story has her own art), and
-  shows no portrait when the wiki points at a story section without one ('Amiya' in Babel).
-- `/enemy` finds each enemy's own wiki page by its game id and takes the portrait from the
-  character that page names (Lava, Flame of Resistance: Lava the Purgatory). Enemies that only share
-  a name with an operator (the "Catapult", Frost) get no portrait. The Wiki button opens the enemy's
-  own page.
-- `/enemy` picks the NPC art for enemies who are also operators (Talulah, Crownslayer) from the
-  wiki's Story page, and art named after the variant (Talulah, the Fighter). `/operator` for a name
-  not in the EN data (NPCs, CN-only operators) shows the wiki picture.
-- `/enemy` shows the portrait from the wiki page of story enemies (Jesselton Williams, Yurodstvo,
-  Patriot, Emperor's Blade...) with a Character page link, and buttons to switch between an enemy's
-  variants ('Emperor's Blade', Pursuer, Halberd Breaker; Originium Slug α, β).
-- `/myrtle enemies` is gone: enemy handbook progress is now a line in `/myrtle profile`, and enemy
-  details are `/enemy`.
-- New `/enemy`: an enemy's handbook entry (class, type, stats with the stronger stage levels,
-  abilities, immunities) from the EN game data, with a link to its wiki enemy page.
-- `/operator` Modules view shows one module per page, with a button per module and an Effects /
-  Community review switch, instead of every module in one long embed.
-- `/operator` profile reads like the wiki infobox: class, branch, position, faction, trait, summons,
-  tags, how to get, tier and alternate versions, plus Amiya's forms.
-- One PRTS look for every reply: a "PRTS · <module>" header (Operator Archives, Combat Records,
-  Materials Planning, ...), the same colours and footer, and fewer emoji. No more narrow
-  three-column fields (`/stage`, `/compare`, `/skin`, `/myrtle`, `/base`, the music panel).
-- Buttons and menus for details: `/materials` switches goals with buttons and groups materials by
-  tier, `/skin` has an outfit picker, `/help` has a command menu, `/operator` gains a Materials
-  button, and `/stage` and `/myrtle` links are link buttons. Pressed from a private reply they
-  switch it in place; pressed on a public message they answer privately.
-- Fixes: `/stage` showed a raw ID for operator rewards, `/compare` showed raw branch IDs and ran
-  the legend into the table.
-- `/operator` is a compact card again: profile, a one-line list of modules with their rating, and
-  buttons for details shown privately. **Modules** explains each module in plain words (stage 1
-  trait change, stats, the talent stages 2 and 3 improve, from the EN game data, plus the DragonGJY
-  verdict), with a further **Community pros and cons** button. **Outfits** and **Base skills** show
-  what `/skin` and `/base` show. Wiki, Myrtle, story and voice links are link buttons.
-- Fewer commands: `/coin` and `/choose` are now `/roll coin` and `/roll choose` (dice is `/roll dice`);
-  `/module` became the "Module pros and cons" button on `/operator`; `/links` is `/help command: links`;
-  `/voice` is `/music voice`.
-- `/story` autocompletes stories and events and shows who speaks in each chapter.
-- `/operator` for an NPC also shows their story appearances (lines and stories).
-- `/farm` understands tier names (Orirock Cube, Integrated Device) and says when a material is
-  best bought from event shops.
-- Optional daily story index refresh (`PRTS_STORY_REFRESH_CMD`), re-read without a restart.
-- Automatic posts: each server picks a channel with `/events announce` for new stories, and
-  events or headhunting banners when they start and a day before they end. The event list is
-  now `/events schedule`.
+A big readability and PRTS-styling update, a new `/enemy` command, and fewer commands overall.
+
+### New
+- `/enemy`: an enemy's handbook entry from the EN game data: class, type, stats with the stronger
+  stage levels, abilities, immunities, the portrait from its wiki page (hand-checked where the wiki
+  is ambiguous), and buttons to switch between variants ('Emperor's Blade', Pursuer, Halberd Breaker).
+- `/stage` lists the stage's enemies; `/tier operator:` shows the sheet's written assessment and
+  rating history; `/myrtle showcase` previews grids and tier lists.
+- Page buttons (◀ 1/N ▶) for long replies: `/tier`, `/myrtle inventory`, `/music queue`, `/music list`.
+- `/prts` answers in the in-game PRTS voice, with greetings and a self-verification `/status`.
+
+### One PRTS look
+- Every reply is a card with a "PRTS · <module>" header, PRTS red, and the PRTS footer; amber only
+  for warnings. No narrow three-column fields anywhere.
+- `/operator` is a compact wiki-style profile (class, trait, summons, how to get, tier, alternates)
+  with buttons: Modules (one module per page, plain-word effects, community review), Outfits,
+  Base skills, Materials, and link buttons.
+- `/compare` has Operator 1 | Compare | Operator 2 tabs with tier, modules and verdicts;
+  `/materials` switches goals with buttons; `/skin` has an outfit menu; `/help` has a command menu.
+- `/base`, `/wiki`, `/status`, `/remind` and the `/rp` cards read in plain words.
+
+### Changed
+- `/recruit` takes one comma-separated tags option with autocomplete; `/roll` explains its dice
+  notation, takes a reason, and the coin can be weighted.
+- `/events` splits 6★ and 5★ rate-ups for every banner type; `/farm` names new material families
+  from the sheet itself.
+- Roleplay: each channel has its own session; turn reminders ping only players who wrote there;
+  someone with no character gets a "join or OOC" card instead of a stuck wait.
+- Fewer commands: `/coin` and `/choose` are `/roll coin|choose`, `/module` is a button on
+  `/operator`, `/links` is `/help command: links`, `/voice` is `/music voice`, `/myrtle enemies` is a
+  line in `/myrtle profile`, `/rp status` is part of `/rp channels`.
+- Automatic posts: `/events announce` picks a channel for new stories, events and banners;
+  `/story` autocompletes and shows who speaks; optional daily story index refresh.
+
+### Fixed
+- `/stage` showed raw IDs for operator rewards; `/compare` showed raw branch IDs; 3★ operators had
+  no art; `/myrtle enemies` crashed on unnamed enemies; `/base` team lists swallowed workers.
+
+### For developers
+- `src/theme.ts` (shared look), `src/pages.ts` (page buttons), `src/equip.ts` and `src/enemy.ts`
+  (game data parsing); `tests/help.test.ts` fails when a command is missing from `/help`.
 
 ## 0.1.0 (unreleased)
 
