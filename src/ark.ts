@@ -1200,6 +1200,19 @@ function classOfName(n: string, sh: Sheets): string | undefined {
   return sh.classOf.get(k)
 }
 
+/** Tier, modules (with the DragonGJY grade) and the tier sheet's latest verdict for one operator, for /compare. */
+export function operatorSummary(name: string): { tier?: string; modules: { type: string; name: string; grade?: string }[]; verdict?: string } {
+  ensureData()
+  const sh = loadSheets()
+  const o = findOps(name, 1)[0]
+  const rated = sh?.modules.get(normName(o?.name ?? name)) ?? []
+  return {
+    tier: sh?.tierOf.get(normName(o?.name ?? name))?.join(', '),
+    modules: (o?.modules ?? []).map(m => ({ type: m.type, name: m.name, grade: ratingRow(m, rated)?.[4]?.trim() })),
+    verdict: sh?.tierNotes.get(normName(o?.name ?? name))?.text,
+  }
+}
+
 /** Short forms the tier sheet uses in its revision log ("Texas2", "Kal2", "Ros IS") for an operator. */
 function tierAliases(o: Op | undefined, name: string): RegExp[] {
   const out = [name]
@@ -1491,12 +1504,54 @@ async function wikiLookup(q: string): Promise<EmbedBuilder | null> {
   const ex = exact?.[1]?.[0]
   if (ex && normName(ex) === normName(q)) titles = [ex, ...titles.filter(t => t !== ex)]
   if (!titles.length) return null
-  const p = await wikiApi({ action: 'query', prop: 'extracts', exintro: '1', explaintext: '1', exsentences: '5', titles: titles[0], redirects: '1' })
+  const [p, parsed, toc] = await Promise.all([
+    wikiApi({ action: 'query', prop: 'extracts|pageimages', exintro: '1', explaintext: '1', exchars: '1400', piprop: 'thumbnail', pithumbsize: '400', titles: titles[0], redirects: '1' }),
+    wikiApi({ action: 'parse', page: titles[0], prop: 'wikitext', section: '0', redirects: '1' }).catch(() => null),
+    wikiApi({ action: 'parse', page: titles[0], prop: 'sections', redirects: '1' }).catch(() => null),
+  ])
   const page: any = Object.values(p.query?.pages ?? {})[0]
   const title = page?.title ?? titles[0]
   const e = embed(title)
     .setURL(wikiUrl(title))
-    .setDescription(clip(page?.extract || 'No summary available. Please open the page.', 1500))
+    .setDescription(clip((page?.extract || 'No summary available. Please open the page.').replace(/\n{2,}/g, '\n\n').trim(), 1500))
+  if (page?.thumbnail?.source) e.setThumbnail(page.thumbnail.source)
+  // Key facts from the page's infobox, when it has one.
+  const wt = String(parsed?.parse?.wikitext?.['*'] ?? '')
+  const FACTS: [string, string][] = [
+    ['race', 'Race'],
+    ['affiliation', 'Affiliation'],
+    ['occupation', 'Occupation'],
+    ['birthplace', 'Birthplace'],
+    ['status', 'Status'],
+    ['type', 'Type'],
+    ['leader', 'Leader'],
+    ['part', 'Part of'],
+    ['grade', 'Class'],
+    ['damage', 'Damage'],
+    ['appearance', 'Appears in'],
+  ]
+  const field = (k: string) => {
+    const m = new RegExp(`\\n\\s*\\|\\s*${k}\\s*=([\\s\\S]*?)(?=\\n\\s*\\||\\}\\})`, 'i').exec(wt)
+    if (!m) return ''
+    return m[1]
+      .replace(/<ref[\s\S]*?(<\/ref>|\/>)/g, '')
+      .replace(/\{\{Collapsible[^{}]*?content=/gi, '')
+      .replace(/\}\}/g, '')
+      .replace(/\{\{[^{}]*\|text=([^|}]*)[^{}]*\}\}/g, '$1')
+      .replace(/\{\{[^{}]*\}\}/g, '')
+      .replace(/\[\[(?:[^\]|]*\|)?([^\]]*)\]\]/g, '$1')
+      .replace(/''+/g, '')
+      .split(/\n\s*\*+\s*|\n/)
+      .map(x => x.replace(/^\*+\s*/, '').trim())
+      .filter(Boolean)
+      .slice(0, 4)
+      .join(', ')
+      .replace(/^[,\s]+/, '')
+  }
+  const facts = FACTS.map(([k, label]) => [label, field(k)] as const).filter(([, v]) => v && v.length < 200)
+  if (facts.length) e.addFields({ name: 'Profile', value: clip(facts.map(([l, v]) => `**${l}:** ${v}`).join('\n'), 1024) })
+  const secs = (toc?.parse?.sections ?? []).filter((x: any) => x.toclevel === 1 && !/^(References|Navigation|Notes|Gallery|Trivia)$/i.test(x.line)).slice(0, 10)
+  if (secs.length) e.addFields({ name: 'On this page', value: clip(secs.map((x: any) => `[${x.line.replace(/<[^>]+>/g, '')}](${wikiUrl(title)}#${encodeURIComponent(x.anchor)})`).join(' · '), 1024) })
   const more = titles.slice(1, 6).map(t => `[${t}](${wikiUrl(t)})`)
   if (more.length) e.addFields({ name: 'Other results', value: more.join(' · ') })
   e.setFooter({ text: `${FOOTER} · arknights.wiki.gg` })

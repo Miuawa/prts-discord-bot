@@ -21,7 +21,7 @@ import {
 } from 'discord.js'
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs'
 import { join } from 'path'
-import { findOps, normName, registerHelp } from './ark.ts'
+import { findOps, normName, operatorSummary, registerHelp } from './ark.ts'
 
 import { COLOR, FOOTER, SECTION, brand, stampEmbeds } from './theme.ts'
 import { type Enemy, parseEnemies, statLines } from './enemy.ts'
@@ -1109,7 +1109,16 @@ async function cmdCompare(i: ChatInputCommandInteraction, eph: boolean) {
   const who = (x: { c: CharPlus }) => `**${x.c.name}** · ${'★'.repeat(x.c.rarity)} ${x.c.cls} (${findOps(x.c.name, 1)[0]?.branch ?? x.c.branch})`
   const e = embed(`${a.c.name} vs ${b.c.name}`)
     .setDescription([who(a), who(b), '```', ...lines, '```', '▲ marks the better value.'].join('\n'))
-    .setFooter({ text: `${FOOTER} · Maximum level at the highest promotion, without potential, trust or module bonuses` })
+    .setFooter({ text: `${FOOTER} · Stats at maximum level, highest promotion, no potential, trust or module bonuses · Tier and module grades are fan-made` })
+  // Beyond raw stats: tier, modules with their community grade, and the tier sheet's verdict.
+  for (const x of [a, b]) {
+    const sum = operatorSummary(x.c.name)
+    const mods = sum.modules.length ? sum.modules.map(m => `${m.type}${m.grade ? ` (${m.grade})` : ''}`).join(' · ') : 'none'
+    e.addFields({
+      name: x.c.name,
+      value: clip([`**Tier:** ${sum.tier ?? 'not listed'}`, `**Modules:** ${mods}`, sum.verdict ? `**Verdict:** ${clip(sum.verdict, 300)}` : ''].filter(Boolean).join('\n'), 1024),
+    })
+  }
   await i.reply({ embeds: [e], flags: ephFlag(eph) })
 }
 
