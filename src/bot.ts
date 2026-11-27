@@ -34,6 +34,7 @@ import {
   ButtonStyle,
   ActionRowBuilder,
   Routes,
+  ActivityType,
   type Message,
   type Attachment,
   type Interaction,
@@ -43,6 +44,7 @@ import {
 import { randomBytes } from 'crypto'
 import { MUSIC_COMMAND, handleMusic, handleMusicButton, handleMusicSelect, handleMusicAutocomplete } from './music.ts'
 import { FRAME_CHARS, SECTION, brand, frameChunks } from './theme.ts'
+import { visit } from './visits.ts'
 import { ARK_COMMANDS, ARK_COMMAND_NAMES, handleArk, handleArkAutocomplete, handleArkButton, handleArkSelect, registerHelp, startStoryRefresh } from './ark.ts'
 import { ARKPLUS_COMMANDS, ARKPLUS_NAMES, handleArkPlus, handleArkPlusAutocomplete, handleArkPlusButton, startAnnouncements, startReminders } from './arkplus.ts'
 import { readAiConfig, aiAvailable, apiBackendFor, describeBackend, type AiConfig } from './ai/config.ts'
@@ -1107,6 +1109,7 @@ async function handleSlash(interaction: ChatInputCommandInteraction | MessageCon
         command,
         ...(subcommand ? { subcommand } : {}),
         ...(interaction.isChatInputCommand() && command === 'prts' && interaction.options.getString('style') === 'normal' ? { style: 'normal' } : {}),
+        ...(slashChats.get(chat_id)?.framed ? visit(interaction.user.id) : {}),
         ...extraMeta,
         ...(ephemeral ? { private: 'true' } : {}),
         ...(interaction.guildId ? { guild_id: interaction.guildId } : {}),
@@ -1343,6 +1346,7 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
   const online = aiOnline()
   const started = online ? await narratorStartedAt() : null
   const lines = [
+    '-# Activating Self-verification program...',
     '[PRTS] System status report.',
     '**Discord bot** (instant commands, `/roll`, `/myrtle` and so on)',
     '• Status: operational',
@@ -1362,7 +1366,10 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
     `• Last reply: ${lastAnyReplyAt ? rel(lastAnyReplyAt) : 'none since the bot started'}`,
     `• Requests awaiting an answer: ${waiting}`,
     '',
-    'All systems reported. Is there anything else? I am always happy to help.',
+    online || CORE_AI.backend !== 'claude-code'
+      ? 'Verified. System logic is functioning correctly. All systems operational.'
+      : 'Verification complete. The narrative core is not responding; instant functions remain operational.',
+    'Is there anything else? I am always happy to help.',
   ].filter((l, i, a) => !(l === '' && a[i - 1] === ''))
   await interaction.editReply({ content: lines.join('\n') })
 }
@@ -1494,6 +1501,16 @@ client.once('clientReady', c => {
   startReminders(client)
   startStoryRefresh(client)
   startAnnouncements(client)
+  // The member list shows PRTS's state like a system tray: all systems, or instant functions only.
+  let shown = ''
+  const presence = () => {
+    const state = aiAvailable(CORE_AI, aiOnline()) ? 'All systems operational.' : 'Narrative core offline. Instant functions operational.'
+    if (state === shown) return
+    shown = state
+    c.user.setPresence({ activities: [{ name: 'PRTS', type: ActivityType.Custom, state }], status: state.startsWith('All') ? 'online' : 'idle' })
+  }
+  presence()
+  setInterval(presence, 30_000).unref?.()
 })
 
 if (DRY_RUN) {

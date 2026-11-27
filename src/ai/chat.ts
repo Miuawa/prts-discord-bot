@@ -30,10 +30,24 @@ const PREAMBLE = [
   'Discord shows about 2000 characters per message; keep answers short (a few sentences) unless asked for more.',
 ].join('\n')
 
+/** One opening line, the way PRTS greets the Doctor in the game, from the bot's visit notes. */
+function greeting(m: Record<string, string | undefined>): string {
+  const hour = Number(/ (\d\d):/.exec(m.local_time ?? '')?.[1] ?? NaN)
+  const tod = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'
+  const line = m.first_visit
+    ? '"Identity verification complete. Welcome to the Primitive Rhodes Island Terminal Service, Doctor."'
+    : m.away_for
+      ? `"Welcome home, Doctor. Since your last visit, it has been ${m.away_for}."`
+      : m.first_visit_today
+        ? `"${Number.isFinite(hour) ? tod : 'Welcome home'}, Doctor."`
+        : ''
+  return line ? `\n\nThis is the person's first message ${m.first_visit ? 'ever' : m.away_for ? 'in a long time' : 'today'}: open with ${line} on its own line, then answer.` : ''
+}
+
 export const CHAT_HOOKS: TurnHooks = {
   key: 'prts',
   prompt(ev) {
     if (ev.meta.style === 'normal') return { system: `${PREAMBLE}\n\nAnswer as a plain, friendly assistant. No persona, no system phrases. Answer directly and concisely.` }
-    return { system: `${PREAMBLE}\n\n${persona()}` }
+    return { system: `${PREAMBLE}\n\n${persona()}${greeting(ev.meta)}` }
   },
 }

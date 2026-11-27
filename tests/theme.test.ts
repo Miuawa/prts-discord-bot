@@ -29,3 +29,16 @@ describe('PRTS theme', () => {
     expect(frameChunks(['-# PRTS · Terminal Interface\nHi\n-# Primitive Rhodes Island Terminal Service'], true)).toEqual([`${CHAT_HEADER}\nHi\n${CHAT_FOOTER}`])
   })
 })
+
+import { span, visit } from '../src/visits.ts'
+describe('PRTS visits', () => {
+  test('first visit, same day, next day, long absence', () => {
+    const id = `test-${Math.random()}`
+    const t0 = new Date(2026, 10, 1, 9, 0).getTime()
+    expect(visit(id, t0).first_visit).toBe('true')
+    expect(visit(id, t0 + 3_600_000).first_visit_today).toBeUndefined()
+    expect(visit(id, t0 + 86_400_000).first_visit_today).toBe('true')
+    expect(visit(id, t0 + 13 * 86_400_000 + 4 * 3_600_000).away_for).toBe('12 days, 4 hours')
+    expect(span(60_000)).toBe('1 minute')
+  })
+})
