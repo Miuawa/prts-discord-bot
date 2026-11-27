@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- One PRTS look for every reply: a "PRTS · <module>" header (Operator Archives, Combat Records,
+  Materials Planning, ...), the same colours and footer, and fewer emoji. No more narrow
+  three-column fields (`/stage`, `/compare`, `/skin`, `/myrtle`, `/base`, the music panel).
+- Buttons and menus for details: `/materials` switches goals with buttons and groups materials by
+  tier, `/skin` has an outfit picker, `/help` has a command menu, `/operator` gains a Materials
+  button, and `/stage` and `/myrtle` links are link buttons. Pressed from a private reply they
+  switch it in place; pressed on a public message they answer privately.
+- Fixes: `/stage` showed a raw ID for operator rewards, `/compare` showed raw branch IDs and ran
+  the legend into the table.
 - `/operator` is a compact card again: profile, a one-line list of modules with their rating, and
   buttons for details shown privately. **Modules** explains each module in plain words (stage 1
   trait change, stats, the talent stages 2 and 3 improve, from the EN game data, plus the DragonGJY

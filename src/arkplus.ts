@@ -7,11 +7,23 @@
 // Game data comes from the same GitHub mirror as ark.ts. It is large (the stage
 // and activity tables are 20 MB each), so it is trimmed once a day into
 // cache/arkplus.json.
-import { EmbedBuilder, MessageFlags, PermissionFlagsBits, type AutocompleteInteraction, type ChatInputCommandInteraction, type Client } from 'discord.js'
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  EmbedBuilder,
+  MessageFlags,
+  PermissionFlagsBits,
+  type AutocompleteInteraction,
+  type ButtonInteraction,
+  type ChatInputCommandInteraction,
+  type Client,
+} from 'discord.js'
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs'
 import { join } from 'path'
 import { findOps, normName, registerHelp } from './ark.ts'
 
+import { COLOR, FOOTER, SECTION, brand, stampEmbeds } from './theme.ts'
 import { CACHE_DIR } from './paths.ts'
 import { announce, announceChannelFor, setAnnounceChannel } from './announce.ts'
 const CACHE_FILE = join(CACHE_DIR, 'arkplus.json')
@@ -19,8 +31,6 @@ const REMIND_FILE = join(CACHE_DIR, 'reminders.json')
 const GAMEDATA = 'https://raw.githubusercontent.com/ArknightsAssets/ArknightsGamedata/master/en/gamedata/excel/'
 const WIKI = 'https://arknights.wiki.gg'
 const UA = 'PRTS-Discord-bot/1.0 (private Arknights fan bot)'
-const COLOR = { info: 0x23b7e5, ok: 0x3fb950, warn: 0xf2a33a, dim: 0x5c6670 }
-const FOOTER = 'Primitive Rhodes Island Terminal Service'
 const DATA_VERSION = 3
 const MAX_AGE_MS = 24 * 3600 * 1000
 const log = (s: string) => process.stderr.write(`prts arkplus: ${s}\n`)
@@ -122,7 +132,7 @@ export const ARKPLUS_NAMES = new Set(ARKPLUS_COMMANDS.map(c => c.name))
 registerHelp([
   {
     cmd: 'events',
-    group: 'Arknights',
+    group: 'Arknights records',
     short: 'Current and upcoming events and banners',
     usage: '/events schedule [show:<all|events|banners>] | announce [channel:<#channel>] [off:true]',
     detail:
@@ -131,7 +141,7 @@ registerHelp([
   },
   {
     cmd: 'stage',
-    group: 'Arknights',
+    group: 'Arknights records',
     short: 'Stage cost, recommended level and drops',
     usage: '/stage name:<code or name>',
     detail: "Shows a stage's sanity cost, recommended level, what it drops and how often, and what it gives on clear. Start typing for suggestions.",
@@ -139,7 +149,7 @@ registerHelp([
   },
   {
     cmd: 'compare',
-    group: 'Arknights',
+    group: 'Arknights records',
     short: 'Two operators side by side',
     usage: '/compare operator1:<name> operator2:<name>',
     detail: 'Compares maximum stats (HP, ATK, DEF, RES, DP cost, block, redeploy time, attack interval) at the highest promotion and level, without potential, trust or module bonuses.',
@@ -147,10 +157,11 @@ registerHelp([
   },
   {
     cmd: 'materials',
-    group: 'Arknights',
+    group: 'Arknights records',
     short: 'What an operator needs to be raised',
     usage: '/materials operator:<name> [goal:<elite1|elite2|skills|masteries|modules|everything>]',
-    detail: 'Adds up the materials and LMD for the chosen goal. Use /farm material:<name> to see where to farm what you are missing.',
+    detail:
+      'Adds up the materials and LMD for the chosen goal, grouped by material tier. Buttons under the reply switch between goals (Elite 1, Elite 2, skills, masteries, modules, everything). Use /farm material:<name> to see where to farm what you are missing.',
     examples: ['/materials operator: Exusiai goal: masteries', '/materials operator: Amiya'],
   },
   {
@@ -531,17 +542,17 @@ async function cmdEvents(i: ChatInputCommandInteraction, eph: boolean) {
       // Operators whose in-game obtain method is "Event Reward" are the free (welfare) ones.
       const free = names.filter(n => byName.get(normName(n))?.obtain === 'Event Reward')
       const rest = names.filter(n => !free.includes(n))
-      const detail = [free.length ? `🎁 Free reward: ${free.join(', ')}` : '', rest.length ? `Featured: ${clip(rest.join(', '), 200)}` : ''].filter(Boolean).join(' · ')
+      const detail = [free.length ? `Free reward: ${free.join(', ')}` : '', rest.length ? `Featured: ${clip(rest.join(', '), 200)}` : ''].filter(Boolean).join(' · ')
       return line(x.name, '', x.start, x.end, running) + (detail ? `\n↳ ${detail}` : '')
     }
     e.addFields(
       field(
-        '🟢 Events running now',
+        'Events running now',
         evs.now.map(x => row(x, true)),
         'No records on file.',
       ),
       field(
-        '🔜 Events coming up',
+        'Events coming up',
         evs.soon.slice(0, 6).map(x => row(x, false)),
         'No announcements on file yet.',
       ),
@@ -565,12 +576,12 @@ async function cmdEvents(i: ChatInputCommandInteraction, eph: boolean) {
       })()
     e.addFields(
       field(
-        '🎯 Headhunting now',
+        'Headhunting now',
         bs.now.map(b => bl(b, true)),
         'No records on file.',
       ),
       field(
-        '🔜 Headhunting coming up',
+        'Headhunting coming up',
         bs.soon.slice(0, 5).map(b => bl(b, false)),
         'No announcements on file yet.',
       ),
@@ -645,7 +656,7 @@ async function cmdStage(i: ChatInputCommandInteraction, eph: boolean) {
   const extra: string[] = []
   const listed = new Set<string>()
   for (const [id, type, occ, drop] of [...s.drops].sort((x, y) => (OCC[x[2]] ?? 4) - (OCC[y[2]] ?? 4))) {
-    const name = type === 'GOLD' ? 'LMD' : itemName(p, id)
+    const name = type === 'GOLD' ? 'LMD' : type === 'CHAR' ? `${p.chars[id]?.name ?? 'an operator'} (operator)` : itemName(p, id)
     if (listed.has(name + drop)) continue
     listed.add(name + drop)
     if (drop === 'ONCE' || drop === 'FIRST') {
@@ -657,18 +668,28 @@ async function cmdStage(i: ChatInputCommandInteraction, eph: boolean) {
   }
   const e = embed(`${s.code} · ${s.name}`)
     .setURL(wikiUrl(s.code))
-    .setDescription(clip(s.desc || '_No description on record._', 600))
-    .addFields(
-      { name: 'Sanity cost', value: `${s.ap}${s.ap ? '' : ' (free)'}`, inline: true },
-      { name: 'Type', value: `${STAGE_TYPE[s.type] ?? s.type}${s.diff === 'TOUGH' ? ' · challenge mode' : ''}`, inline: true },
-      { name: 'Recommended', value: s.danger || '—', inline: true },
+    .setDescription(
+      [
+        `**${STAGE_TYPE[s.type] ?? s.type}${s.diff === 'TOUGH' ? ' · challenge mode' : ''}** · ${s.ap ? `${s.ap} Sanity` : 'free (no Sanity)'}${s.danger ? ` · recommended ${s.danger.replace(/^LV\.?\s*/i, 'Lv. ')}` : ''}`,
+        '',
+        `*${clip((s.desc || 'No description on record.').replace(/\s*\n\s*/g, ' '), 600)}*`,
+      ].join('\n'),
     )
   const lines = groups.map((g, k) => (g.length ? `**${OCC_LABEL[k]}:** ${[...new Set(g)].join(', ')}` : '')).filter(Boolean)
   e.addFields({ name: 'Drops', value: clip(lines.join('\n') || 'No drop list in the game data.', 1000) })
-  if (s.exp || s.gold) e.addFields({ name: 'On clear', value: `${s.exp.toLocaleString('en-US')} operator EXP · ${s.gold.toLocaleString('en-US')} LMD`, inline: true })
-  if (extra.length) e.addFields({ name: 'First clear', value: clip([...new Set(extra)].join(', '), 300), inline: true })
-  e.addFields({ name: 'Links', value: `[Wiki](${wikiUrl(s.code)}) · [Wiki search](${WIKI}/index.php?search=${encodeURIComponent(s.name)})` })
-  await i.reply({ embeds: [e], flags: ephFlag(eph) })
+  const rewards = [
+    s.exp || s.gold ? `**Every clear:** ${s.exp.toLocaleString('en-US')} operator EXP · ${s.gold.toLocaleString('en-US')} LMD` : '',
+    extra.length ? `**First clear:** ${clip([...new Set(extra)].join(', '), 300)}` : '',
+  ].filter(Boolean)
+  if (rewards.length) e.addFields({ name: 'Rewards', value: rewards.join('\n') })
+  const links = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Wiki').setURL(wikiUrl(s.code)),
+    new ButtonBuilder()
+      .setStyle(ButtonStyle.Link)
+      .setLabel('Wiki search')
+      .setURL(`${WIKI}/index.php?search=${encodeURIComponent(s.name)}`),
+  )
+  await i.reply({ embeds: [e], components: [links], flags: ephFlag(eph) })
 }
 
 // ───────────────────────── /compare ─────────────────────────
@@ -712,9 +733,9 @@ async function cmdCompare(i: ChatInputCommandInteraction, eph: boolean) {
     const mark = (me: number, other: number) => (me === other ? ' ' : (better === 'high' ? me > other : me < other) ? '▲' : ' ')
     lines.push(`${label.padEnd(w)}${(f(x) + mark(x, y)).padEnd(15)}${f(y)}${mark(y, x)}`)
   }
+  const who = (x: { c: CharPlus }) => `**${x.c.name}** · ${'★'.repeat(x.c.rarity)} ${x.c.cls} (${findOps(x.c.name, 1)[0]?.branch ?? x.c.branch})`
   const e = embed(`${a.c.name} vs ${b.c.name}`)
-    .addFields({ name: a.c.name, value: `${a.c.rarity}★ ${a.c.cls}\n${a.c.branch}`, inline: true }, { name: b.c.name, value: `${b.c.rarity}★ ${b.c.cls}\n${b.c.branch}`, inline: true })
-    .setDescription('```\n' + lines.join('\n') + '\n```▲ = better value')
+    .setDescription([who(a), who(b), '```', ...lines, '```', '▲ marks the better value.'].join('\n'))
     .setFooter({ text: `${FOOTER} · Maximum level at the highest promotion, without potential, trust or module bonuses` })
   await i.reply({ embeds: [e], flags: ephFlag(eph) })
 }
@@ -723,19 +744,19 @@ async function cmdCompare(i: ChatInputCommandInteraction, eph: boolean) {
 function sum(into: Map<string, number>, list: Cost[]) {
   for (const [id, n] of list) into.set(id, (into.get(id) ?? 0) + n)
 }
-async function cmdMaterials(i: ChatInputCommandInteraction, eph: boolean) {
-  const p = await need(i, eph)
-  if (!p) return
-  const hit = charOf(p, i.options.getString('operator', true))
-  if (!hit) {
-    await i.reply({
-      embeds: [embed('Record not found').setColor(COLOR.warn).setDescription('I could not find that operator. Please pick a name from the suggestions. I apologize.')],
-      flags: ephFlag(eph),
-    })
-    return
-  }
-  const c = hit.c
-  const goal = i.options.getString('goal') ?? 'everything'
+const GOALS: [string, string][] = [
+  ['everything', 'Everything'],
+  ['elite1', 'Elite 1'],
+  ['elite2', 'Elite 2'],
+  ['skills', 'Skills'],
+  ['masteries', 'Masteries'],
+  ['modules', 'Modules'],
+]
+const TIER_NAME = ['', 'Tier 1 (common)', 'Tier 2', 'Tier 3', 'Tier 4', 'Tier 5 (rarest)']
+
+/** The /materials view for one goal, with buttons to switch goal (`arkp:mat:<operator id>:<goal>`). */
+function materialsView(p: Plus, id: string, goal: string): { embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder>[] } {
+  const c = p.chars[id]
   const total = new Map<string, number>()
   const parts: string[] = []
   const want = (g: string) => goal === 'everything' || goal === g
@@ -749,50 +770,89 @@ async function cmdMaterials(i: ChatInputCommandInteraction, eph: boolean) {
   }
   if (want('skills') && c.skills.length) {
     for (const l of c.skills) sum(total, l)
-    parts.push('Skill levels 2 to 7')
+    parts.push('skill levels 2 to 7')
   }
   if (want('masteries') && c.masteries.length) {
     for (const sk of c.masteries) for (const m of sk) sum(total, m)
-    parts.push(`Masteries (${c.masteries.length} skill${c.masteries.length > 1 ? 's' : ''} to M3)`)
+    parts.push(`masteries (${c.masteries.length} skill${c.masteries.length > 1 ? 's' : ''} to M3)`)
   }
   if (want('modules') && c.modules.length) {
     for (const m of c.modules) for (const st of m.cost) sum(total, st)
-    parts.push(`Modules (${c.modules.map(m => m.name).join(', ')})`)
+    parts.push(`modules to stage 3 (${c.modules.map(m => m.name).join(', ')})`)
   }
+  const label = GOALS.find(g => g[0] === goal)?.[1] ?? goal
+  const e = embed(`${c.name} · ${label}`).setURL(wikiUrl(c.name)).setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${id}.png`)
+  const lmd = total.get('4001') ?? 0
+  total.delete('4001')
   if (!total.size) {
+    e.setDescription(`${'★'.repeat(c.rarity)} ${c.cls} · ${c.name} needs nothing for this goal in the game data.`).setColor(COLOR.dim)
+  } else {
+    e.setDescription([`${'★'.repeat(c.rarity)} ${c.cls} · covers ${parts.join(', ')}.`, lmd ? `**LMD:** ${lmd.toLocaleString('en-US')}` : ''].filter(Boolean).join('\n'))
+    const byTier = new Map<number, [string, number][]>()
+    for (const [mid, n] of total) {
+      const t = p.items[mid]?.[1] ?? 0
+      byTier.set(t, [...(byTier.get(t) ?? []), [mid, n]])
+    }
+    for (const t of [...byTier.keys()].sort((x, y) => y - x)) {
+      const list = byTier.get(t)!.sort((x, y) => y[1] - x[1])
+      e.addFields({ name: TIER_NAME[t] ?? 'Other', value: clip(list.map(([mid, n]) => `${itemName(p, mid)} ×${n.toLocaleString('en-US')}`).join(' · '), 1024) })
+    }
+    // Farmable materials only: chips, skill summaries and module items come from other places.
+    const top = [...total.entries()]
+      .filter(([mid]) => (p.items[mid]?.[1] ?? 0) >= 3 && (p.items[mid]?.[1] ?? 0) <= 4 && !/Chip|Skill Summary|Data Supplement|Module|Battle Record/i.test(itemName(p, mid)))
+      .sort((x, y) => (p.items[y[0]]?.[1] ?? 0) - (p.items[x[0]]?.[1] ?? 0) || y[1] - x[1])
+      .map(([mid]) => mid)
+      .slice(0, 3)
+      .map(mid => `\`/farm material:${itemName(p, mid)}\``)
+    if (top.length) e.addFields({ name: 'Where to farm', value: top.join(' · ') })
+  }
+  e.setFooter({ text: `${FOOTER} · Totals from the EN game data` })
+  const has: Record<string, boolean> = {
+    everything: true,
+    elite1: c.elite[0].length > 0,
+    elite2: c.elite[1].length > 0,
+    skills: c.skills.length > 0,
+    masteries: c.masteries.length > 0,
+    modules: c.modules.length > 0,
+  }
+  const btns = GOALS.filter(([g]) => has[g]).map(([g, l]) =>
+    new ButtonBuilder()
+      .setCustomId(`arkp:mat:${id}:${g}`)
+      .setLabel(l)
+      .setStyle(g === goal ? ButtonStyle.Primary : ButtonStyle.Secondary)
+      .setDisabled(g === goal),
+  )
+  const rows: ActionRowBuilder<ButtonBuilder>[] = []
+  for (let k = 0; k < btns.length; k += 3) rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(btns.slice(k, k + 3)))
+  return { embeds: [e], components: rows }
+}
+
+async function cmdMaterials(i: ChatInputCommandInteraction, eph: boolean) {
+  const p = await need(i, eph)
+  if (!p) return
+  const hit = charOf(p, i.options.getString('operator', true))
+  if (!hit) {
     await i.reply({
-      embeds: [embed(`${c.name} · materials`).setDescription(`Nothing to add up for this goal: ${c.name} (${c.rarity}★) has no ${goal} in the game data. I apologize.`)],
+      embeds: [embed('Record not found').setColor(COLOR.warn).setDescription('I could not find that operator. Please pick a name from the suggestions. I apologize.')],
       flags: ephFlag(eph),
     })
     return
   }
-  const lmd = total.get('4001') ?? 0
-  total.delete('4001')
-  const sorted = [...total.entries()].sort((x, y) => (p.items[y[0]]?.[1] ?? 0) - (p.items[x[0]]?.[1] ?? 0) || y[1] - x[1])
-  const lines = sorted.map(([id, n]) => `${itemName(p, id)} ×${n.toLocaleString('en-US')}`)
-  const e = embed(`${c.name} · materials`)
-    .setURL(wikiUrl(c.name))
-    .setDescription(`${c.rarity}★ ${c.cls} · ${parts.join(' + ')}`)
-  // Discord caps a field at 1024 characters, so a long list continues in more fields.
-  let chunk: string[] = [],
-    first = true
-  const flush = () => {
-    if (chunk.length) e.addFields({ name: first ? 'Materials' : 'Materials (cont.)', value: chunk.join('\n') })
-    chunk = []
-    first = false
+  await i.reply({ ...materialsView(p, hit.id, i.options.getString('goal') ?? 'everything'), flags: ephFlag(eph) })
+}
+
+/** Buttons from /materials and the /operator card. A private reply is switched in place; a public one answers privately. */
+export async function handleArkPlusButton(i: ButtonInteraction): Promise<void> {
+  const m = /^arkp:mat:([^:]+):(\w+)$/.exec(i.customId)
+  ensurePlus()
+  if (!m || !plus?.chars[m[1]]) {
+    await i.reply({ content: '[PRTS] That record is not available right now. Please try again shortly. I apologize.', flags: MessageFlags.Ephemeral })
+    return
   }
-  for (const l of lines) {
-    if ([...chunk, l].join('\n').length > 1000) flush()
-    chunk.push(l)
-  }
-  flush()
-  if (lmd) e.addFields({ name: 'LMD', value: lmd.toLocaleString('en-US'), inline: true })
-  const top = sorted
-    .filter(([id]) => (p.items[id]?.[1] ?? 0) >= 3)
-    .slice(0, 3)
-    .map(([id]) => `\`/farm material:${itemName(p, id)}\``)
-  if (top.length) e.addFields({ name: 'Where to farm', value: top.join(' · '), inline: false })
-  await i.reply({ embeds: [e], flags: ephFlag(eph) })
+  const view = materialsView(plus, m[1], m[2])
+  stampEmbeds(view, SECTION.materials)
+  if (i.message?.flags?.has(MessageFlags.Ephemeral)) await i.update(view)
+  else await i.reply({ ...view, flags: MessageFlags.Ephemeral })
 }
 
 // ───────────────────────── /remind ─────────────────────────
@@ -983,6 +1043,7 @@ export function startAnnouncements(client: Client): void {
 
 // ───────────────────────── dispatch ─────────────────────────
 export async function handleArkPlus(i: ChatInputCommandInteraction): Promise<void> {
+  brand(i, SECTION[i.commandName])
   const eph = i.commandName === 'remind' ? true : (i.options.getBoolean('private') ?? false)
   switch (i.commandName) {
     case 'events':

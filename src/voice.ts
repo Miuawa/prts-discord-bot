@@ -19,7 +19,7 @@ import { findOps, normName } from './ark.ts'
 
 const SITE = 'https://arknights.timo.beer'
 const COLOR = { info: 0x23b7e5, dim: 0x5c6670 }
-const FOOTER = 'PRTS · Voice archive'
+const FOOTER = 'Primitive Rhodes Island Terminal Service'
 const DUB_DIR: Record<string, string> = { jp: 'voice', cn: 'voice_cn', en: 'voice_en', kr: 'voice_kr' }
 const DUB_NAME: Record<string, string> = { jp: 'Japanese', cn: 'Chinese', en: 'English', kr: 'Korean' }
 const IDLE_LEAVE_MS = 20_000
@@ -171,7 +171,8 @@ export async function handleVoice(i: ChatInputCommandInteraction): Promise<void>
   const note = dub !== asked ? ` (no ${DUB_NAME[asked]} recording, so ${DUB_NAME[dub]})` : ''
   const e = new EmbedBuilder()
     .setColor(COLOR.info)
-    .setTitle(clip(`🔊 ${op.name} · ${row.title}`, 250))
+    .setAuthor({ name: 'PRTS · Voice Archive' })
+    .setTitle(clip(`${op.name} · ${row.title}`, 250))
     .setDescription(clip(`“${clean(row.text)}”`, 1500) || '_No text on record._')
     .setFooter({ text: `${FOOTER} · ${DUB_NAME[dub]}${note}` })
   await i.editReply({ content: '', embeds: [e] })

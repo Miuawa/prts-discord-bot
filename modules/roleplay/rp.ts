@@ -23,7 +23,7 @@ const OWNERS = (process.env.RP_OWNER_IDS ?? '')
   .map(s => s.trim())
   .filter(Boolean)
 const COLOR = { info: 0x23b7e5, ok: 0x3fb950, warn: 0xf2a33a, dim: 0x5c6670 }
-const FOOTER = 'PRTS · Roleplay module'
+const FOOTER = 'Primitive Rhodes Island Terminal Service'
 
 type RpChannel = { name: string; guildId: string | null; guildName: string | null; setBy: string; setAt: string; paused?: boolean; nudgeMin?: number }
 type RpStore = { channels: Record<string, RpChannel> }
@@ -154,7 +154,7 @@ export const RP_COMMAND = {
 }
 
 function embed(title: string, color = COLOR.info): EmbedBuilder {
-  return new EmbedBuilder().setColor(color).setTitle(title).setFooter({ text: FOOTER })
+  return new EmbedBuilder().setColor(color).setAuthor({ name: 'PRTS · Roleplay Module' }).setTitle(title).setFooter({ text: FOOTER })
 }
 
 export function readPlayers(): [string, string][] {

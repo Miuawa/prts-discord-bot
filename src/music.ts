@@ -550,11 +550,10 @@ function panelEmbed(st: GuildState): EmbedBuilder {
       '\n',
     ),
   )
-  e.addFields(
-    { name: 'Source', value: t.source, inline: true },
-    { name: 'Requested by', value: t.requester ?? '—', inline: true },
-    { name: 'Queue', value: `${st.queue.length} waiting${st.loop === 'track' ? ' · 🔂 track loop' : st.loop === 'queue' ? ' · 🔁 playlist loop' : ''}`, inline: true },
-  )
+  e.addFields({
+    name: 'Details',
+    value: `**Source:** ${t.source} · **Requested by:** ${t.requester ?? '—'}\n**Queue:** ${st.queue.length} waiting${st.loop === 'track' ? ' · 🔂 track loop' : st.loop === 'queue' ? ' · 🔁 playlist loop' : ''}`,
+  })
   return e
 }
 
@@ -709,11 +708,7 @@ function summaryEmbed(history: Played[], title: string, note: string): EmbedBuil
   const total = history.reduce((s, h) => s + (h.duration ?? 0), 0)
   const skipped = history.filter(h => h.skipped).length
   e.setDescription([note, '', ...(first ? [`…${first} earlier song(s) not shown.`] : []), ...lines].join('\n'))
-  e.addFields(
-    { name: 'Songs', value: String(history.length), inline: true },
-    { name: 'Total time', value: fmt(total), inline: true },
-    ...(skipped ? [{ name: 'Skipped', value: String(skipped), inline: true }] : []),
-  )
+  e.addFields({ name: 'Session', value: `**${history.length}** songs · **${fmt(total)}** total${skipped ? ` · ${skipped} skipped` : ''}` })
   return e
 }
 

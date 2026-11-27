@@ -42,8 +42,9 @@ import {
 } from 'discord.js'
 import { randomBytes } from 'crypto'
 import { MUSIC_COMMAND, handleMusic, handleMusicButton, handleMusicSelect, handleMusicAutocomplete } from './music.ts'
-import { ARK_COMMANDS, ARK_COMMAND_NAMES, handleArk, handleArkAutocomplete, handleArkButton, registerHelp, startStoryRefresh } from './ark.ts'
-import { ARKPLUS_COMMANDS, ARKPLUS_NAMES, handleArkPlus, handleArkPlusAutocomplete, startAnnouncements, startReminders } from './arkplus.ts'
+import { SECTION, brand } from './theme.ts'
+import { ARK_COMMANDS, ARK_COMMAND_NAMES, handleArk, handleArkAutocomplete, handleArkButton, handleArkSelect, registerHelp, startStoryRefresh } from './ark.ts'
+import { ARKPLUS_COMMANDS, ARKPLUS_NAMES, handleArkPlus, handleArkPlusAutocomplete, handleArkPlusButton, startAnnouncements, startReminders } from './arkplus.ts'
 import { readAiConfig, aiAvailable, apiBackendFor, describeBackend, type AiConfig } from './ai/config.ts'
 import { handleApiTurn, recordUser, recordAssistant, type TurnHooks } from './ai/turns.ts'
 import { probe } from './ai/providers.ts'
@@ -1153,7 +1154,7 @@ client.on('interactionCreate', async (interaction: Interaction) => {
   }
   if (interaction.isChatInputCommand() && interaction.commandName === 'status') {
     if (await denyUnlisted(interaction)) return
-    await handleStatus(interaction).catch(e => process.stderr.write(`discord: status failed: ${e}\n`))
+    await handleStatus(brand(interaction, SECTION.status)).catch(e => process.stderr.write(`discord: status failed: ${e}\n`))
     return
   }
   if (interaction.isChatInputCommand() && interaction.commandName === 'music') {
@@ -1185,6 +1186,11 @@ client.on('interactionCreate', async (interaction: Interaction) => {
     await handleSlash(interaction).catch(e => process.stderr.write(`discord: handleSlash failed: ${e}\n`))
     return
   }
+  if (interaction.isStringSelectMenu() && (interaction.customId.startsWith('ark:outfit:') || interaction.customId === 'ark:help')) {
+    if (await denyUnlisted(interaction)) return
+    await handleArkSelect(interaction).catch(e => process.stderr.write(`discord: ark select failed: ${e}\n`))
+    return
+  }
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith('music:pick:')) {
     if (await denyUnlisted(interaction)) return
     await handleMusicSelect(interaction).catch(e =>
@@ -1194,6 +1200,11 @@ client.on('interactionCreate', async (interaction: Interaction) => {
     return
   }
   if (!interaction.isButton()) return
+  if (interaction.customId.startsWith('arkp:')) {
+    if (await denyUnlisted(interaction)) return
+    await handleArkPlusButton(interaction).catch(e => process.stderr.write(`discord: arkplus button failed: ${e}\n`))
+    return
+  }
   if (interaction.customId.startsWith('ark:')) {
     if (await denyUnlisted(interaction)) return
     await handleArkButton(interaction).catch(e => process.stderr.write(`discord: ark button failed: ${e}\n`))

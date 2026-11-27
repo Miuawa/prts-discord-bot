@@ -22,6 +22,8 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  StringSelectMenuBuilder,
+  type StringSelectMenuInteraction,
   type ChatInputCommandInteraction,
   type AutocompleteInteraction,
   type ButtonInteraction,
@@ -32,6 +34,7 @@ import { join } from 'path'
 
 const SHEETS = join(DATA_DIR, 'sheets')
 const STORIES_JSON = process.env.PRTS_STORIES_JSON ?? join(DATA_DIR, 'stories.json')
+import { COLOR, FOOTER, SECTION, brand, stampEmbeds } from './theme.ts'
 import { CACHE_DIR, DATA_DIR } from './paths.ts'
 import { announce } from './announce.ts'
 import { type ModuleEffect, parseModule, statLine, gradeWord, recLevel } from './equip.ts'
@@ -43,8 +46,6 @@ const WIKI = 'https://arknights.wiki.gg'
 const MYRTLE = 'https://myrtle.moe'
 const UA = process.env.PRTS_USER_AGENT ?? 'PRTS-Discord-bot/1.0 (unofficial Arknights fan bot)'
 
-const COLOR = { info: 0x23b7e5, ok: 0x3fb950, warn: 0xf2a33a, dim: 0x5c6670 }
-const FOOTER = 'Primitive Rhodes Island Terminal Service'
 const log = (s: string) => process.stderr.write(`prts ark: ${s}\n`)
 
 // ───────────────────────── command definitions ─────────────────────────
@@ -1105,6 +1106,7 @@ async function cmdOperator(i: ChatInputCommandInteraction, eph: boolean) {
       ...(o.modules.length ? [new ButtonBuilder().setCustomId(`ark:mod:${o.id}`).setStyle(ButtonStyle.Primary).setLabel('Modules').setEmoji('🔧')] : []),
       new ButtonBuilder().setCustomId(`ark:skin:${o.id}`).setStyle(ButtonStyle.Secondary).setLabel('Outfits').setEmoji('👗'),
       new ButtonBuilder().setCustomId(`ark:base:${o.id}`).setStyle(ButtonStyle.Secondary).setLabel('Base skills').setEmoji('🏭'),
+      new ButtonBuilder().setCustomId(`arkp:mat:${o.id}:everything`).setStyle(ButtonStyle.Secondary).setLabel('Materials').setEmoji('📦'),
     ),
     opLinkRow(o),
   ]
@@ -1210,6 +1212,7 @@ export async function handleArkButton(i: ButtonInteraction): Promise<void> {
     return
   }
   const eph = MessageFlags.Ephemeral
+  brand(i, { mod: SECTION.operator, modpc: SECTION.operator, skin: SECTION.skin, base: SECTION.base }[m[1]])
   if (m[1] === 'mod') {
     const rated = loadSheets()?.modules.get(normName(o.name)) ?? []
     const components = rated.length
@@ -1227,7 +1230,7 @@ export async function handleArkButton(i: ButtonInteraction): Promise<void> {
       await i.editReply({ content: `[PRTS] No outfit records found for **${o.name}**. I apologize.` })
       return
     }
-    await i.editReply({ embeds: [outfitListEmbed(o, list)], components: skinButtons(o) })
+    await i.editReply({ embeds: [outfitListEmbed(o, list)], components: skinButtons(o, undefined, list) })
   }
 }
 
@@ -1547,8 +1550,7 @@ async function cmdBase(i: ChatInputCommandInteraction, eph: boolean) {
     const t = sh?.teams.find(x => normName(x.title) === n) ?? sh?.teams.find(x => normName(x.title).includes(n))
     if (!t) return i.reply({ content: `[PRTS] No team combo matches "${clip(teamQ, 60)}". Use the suggestions or /base facility:.`, flags: MessageFlags.Ephemeral })
     const e = embed(t.title).setURL(RIIC_URL).setDescription(clip(t.desc, 2000)).setFooter({ text: footer })
-    e.addFields({ name: 'Facility', value: t.facility, inline: true })
-    if (t.effect) e.addFields({ name: 'Effect', value: clip(t.effect, 1024), inline: true })
+    e.addFields({ name: 'Facility and effect', value: clip(`**${t.facility}**${t.effect ? ` · ${t.effect}` : ''}`, 1024) })
     if (t.members) e.addFields({ name: 'Core members', value: clip(t.members, 1024) })
     return i.reply({ embeds: [e], flags: ephFlag(eph) })
   }
@@ -2034,22 +2036,23 @@ async function cmdMyrtle(i: ChatInputCommandInteraction, eph: boolean) {
       e.setTitle(`${tag(u)} · ${o.name}`)
         .setDescription(opLine(r) + others)
         .setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${o.id}.png`)
-        .addFields(
-          {
-            name: 'Skills',
-            value: r.masteries.length ? r.masteries.map(x => `S${x.index + 1}: ${x.mastery ? 'M' + x.mastery : `SL${r.skill_level}`}`).join(' · ') : `SL${r.skill_level}`,
-            inline: true,
-          },
-          {
-            name: 'Modules',
-            value: r.modules.length ? r.modules.map(x => (x.locked ? `${modLabel(r.operator_id, x, true)} locked` : modLabel(r.operator_id, x, true))).join(' · ') : 'None',
-            inline: true,
-          },
-          { name: 'Trust', value: r.favor_point >= 25570 ? '200% (max)' : `${num(r.favor_point)} pts`, inline: true },
-          { name: 'Obtained', value: r.obtained_at ? `<t:${r.obtained_at}:D>` : '—', inline: true },
-          { name: 'Links', value: `[Myrtle profile](${myrtleUrl(u.uid)}) · [Operator page](${MYRTLE}/operators/${o.id}) · [Wiki](${wikiUrl(o.name)})` },
-        )
-      return i.editReply({ embeds: [e] })
+        .addFields({
+          name: 'Build',
+          value: [
+            `**Skills:** ${r.masteries.length ? r.masteries.map(x => `S${x.index + 1} ${x.mastery ? 'M' + x.mastery : `SL${r.skill_level}`}`).join(' · ') : `SL${r.skill_level}`}`,
+            `**Modules:** ${r.modules.length ? r.modules.map(x => (x.locked ? `${modLabel(r.operator_id, x, true)} locked` : modLabel(r.operator_id, x, true))).join(' · ') : 'none'}`,
+            `**Trust:** ${r.favor_point >= 25570 ? '200% (max)' : `${num(r.favor_point)} points`}`,
+            r.obtained_at ? `**Obtained:** <t:${r.obtained_at}:D>` : '',
+          ]
+            .filter(Boolean)
+            .join('\n'),
+        })
+      const links = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Myrtle profile').setURL(myrtleUrl(u.uid)),
+        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Operator page').setURL(`${MYRTLE}/operators/${o.id}`),
+        new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Wiki').setURL(wikiUrl(o.name)),
+      )
+      return i.editReply({ embeds: [e], components: [links] })
     }
     const sort = i.options.getString('sort') ?? 'level'
     const rar = i.options.getInteger('rarity')
@@ -2093,9 +2096,16 @@ async function cmdMyrtle(i: ChatInputCommandInteraction, eph: boolean) {
     .setThumbnail(myrtleAvatar(u.avatar_id))
     .setDescription([u.resume ? `*${clip(u.resume, 200)}*` : '', `**Lv${u.level}** · ${u.server} server · UID \`${u.uid}\`${sec ? ` · Assistant: ${sec}` : ''}`].filter(Boolean).join('\n') + others)
   const s = score ?? u
-  e.addFields({ name: 'Account score', value: `**${s.grade ?? u.grade ?? '?'}** · ${pct(s.total_score)}`, inline: true })
-  if (rank?.rank_global) e.addFields({ name: 'Rank', value: `#${num(rank.rank_global)} global · #${num(rank.rank_server)} ${u.server}`, inline: true })
-  e.addFields({ name: 'Collection', value: `${u.operator_count ?? roster.length} operators · ${u.skin_count ?? '?'} outfits`, inline: true })
+  e.addFields({
+    name: 'Overview',
+    value: [
+      `**Account score:** ${s.grade ?? u.grade ?? '?'} · ${pct(s.total_score)}`,
+      rank?.rank_global ? `**Rank:** #${num(rank.rank_global)} global · #${num(rank.rank_server)} ${u.server}` : '',
+      `**Collection:** ${u.operator_count ?? roster.length} operators · ${u.skin_count ?? '?'} outfits`,
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  })
   if (score)
     e.addFields({
       name: 'Score breakdown',
@@ -2116,19 +2126,23 @@ async function cmdMyrtle(i: ChatInputCommandInteraction, eph: boolean) {
     })
   if (roster.length) e.addFields({ name: 'Roster', value: rosterStats(roster) })
   const res = [num(u.lmd) && `${num(u.lmd)} LMD`, num(u.orundum) && `${num(u.orundum)} Orundum`, num(u.originite) && `${num(u.originite)} Originite Prime`].filter(Boolean)
-  if (res.length) e.addFields({ name: 'Resources', value: res.join(' · '), inline: true })
+  if (res.length) e.addFields({ name: 'Resources', value: res.join(' · ') })
   const acct = [
     u.register_ts ? `Joined <t:${u.register_ts}:D>` : '',
     u.last_online_ts ? `Last online <t:${u.last_online_ts}:R>` : '',
     u.cumulative_signin ? `${u.cumulative_signin} check-in days` : '',
     u.monthly_sub_end ? (u.monthly_sub_end > now ? `Monthly Card until <t:${u.monthly_sub_end}:D>` : 'No active Monthly Card') : '',
   ].filter(Boolean)
-  if (acct.length) e.addFields({ name: 'Account', value: acct.join('\n'), inline: true })
-  e.addFields({ name: 'Links', value: `[Profile](${myrtleUrl(u.uid)}) · [Leaderboard](${MYRTLE}/user/leaderboard) · Roster: \`/myrtle roster player:${u.uid}\`` })
+  if (acct.length) e.addFields({ name: 'Account', value: acct.join(' · ') })
+  e.addFields({ name: 'More', value: `Roster: \`/myrtle roster player:${u.uid}\`` })
   e.setImage(`${MYRTLE}/api/og/user/${u.uid}?v=${encodeURIComponent(u.updated_at ?? '')}`)
   e.setFooter({ text: `${FOOTER} · Data from myrtle.moe${u.updated_at ? ' · synced' : ''}` })
   if (u.updated_at) e.setTimestamp(new Date(u.updated_at))
-  return i.editReply({ embeds: [e] })
+  const links = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Myrtle profile').setURL(myrtleUrl(u.uid)),
+    new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Leaderboard').setURL(`${MYRTLE}/user/leaderboard`),
+  )
+  return i.editReply({ embeds: [e], components: [links] })
 }
 
 // ───────────────────────── /skin ─────────────────────────
@@ -2190,13 +2204,74 @@ async function getOutfits(opId: string): Promise<Outfit[]> {
 }
 
 // Link buttons under a /skin reply: Myrtle's player for chibis and animated art.
-function skinButtons(op: Op, o?: Outfit) {
+function skinButtons(op: Op, o?: Outfit, list?: Outfit[]) {
   const page = `${MYRTLE}/operators/${op.id}`
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('▶ Chibi player').setURL(page).setEmoji('🐾'))
-  if (!o || o.animated) row.addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Animated art').setURL(page).setEmoji('✨'))
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Chibi player').setURL(page))
+  if (!o || o.animated) row.addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Animated art').setURL(page))
   if (o) row.addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Full-size art').setURL(outfitArt(op.id, o)))
   row.addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Wiki').setURL(wikiUrl(op.name)))
-  return [row]
+  const rows: ActionRowBuilder<any>[] = []
+  if (list && list.length > 1)
+    rows.push(
+      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`ark:outfit:${op.id}`)
+          .setPlaceholder('View an outfit…')
+          .addOptions(list.slice(0, 25).map(x => ({ label: clip(x.name, 100), value: clip(x.id, 100), description: clip(x.line || x.obtain || ' ', 100), default: x.id === o?.id }))),
+      ),
+    )
+  rows.push(row)
+  return rows
+}
+
+/** One outfit: its art and details. */
+function outfitEmbed(op: Op, o: Outfit): EmbedBuilder {
+  const e = embed(`${op.name} · ${o.name}`)
+    .setURL(`${MYRTLE}/operators/${op.id}`)
+    .setDescription([o.line && `*${o.line}*`].filter(Boolean).join('\n') || null)
+    .setImage(outfitArt(op.id, o))
+    .setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${op.id}.png`)
+  e.addFields({
+    name: 'Details',
+    value: [
+      o.artist ? `**Artist:** ${o.artist}` : '',
+      o.obtain ? `**How to get:** ${o.obtain}` : '',
+      o.time && o.elite === undefined ? `**Released (EN):** <t:${o.time}:D>` : '',
+      `**Animated art:** ${o.animated ? 'yes, press Animated art below' : 'no'}`,
+      `**Chibi animations:** ${o.chibi.length ? o.chibi.join(', ') : 'not available'}`,
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  })
+  return e.setFooter({ text: `${FOOTER} · Art © Hypergryph/Yostar, hosted by myrtle.moe` })
+}
+
+/** The outfit menu (`ark:outfit:<operator id>`). A private reply is switched in place; a public one answers privately. */
+export async function handleArkSelect(i: StringSelectMenuInteraction): Promise<void> {
+  if (i.customId === 'ark:help') {
+    const which = i.values[0]
+    const h = HELP.find(x => x.cmd === which)
+    const view = stampEmbeds({ embeds: [which === 'links' ? linksEmbed() : h ? helpDetail(h) : embed('Unknown command')], components: [helpMenu()] }, SECTION.help) as any
+    if (i.message?.flags?.has(MessageFlags.Ephemeral)) await i.update(view)
+    else await i.reply({ ...view, flags: MessageFlags.Ephemeral })
+    return
+  }
+  const m = /^ark:outfit:(.+)$/.exec(i.customId)
+  ensureData()
+  const op = m && opIndex()?.byId.get(m[1])
+  if (!op) {
+    await i.reply({ content: '[PRTS] That record is no longer available. I apologize.', flags: MessageFlags.Ephemeral })
+    return
+  }
+  const list = await getOutfits(op.id).catch(() => [] as Outfit[])
+  const o = list.find(x => x.id === i.values[0])
+  if (!o) {
+    await i.reply({ content: '[PRTS] That outfit record is no longer available. I apologize.', flags: MessageFlags.Ephemeral })
+    return
+  }
+  const view = stampEmbeds({ embeds: [outfitEmbed(op, o)], components: skinButtons(op, o, list) }, SECTION.skin) as any
+  if (i.message?.flags?.has(MessageFlags.Ephemeral)) await i.update(view)
+  else await i.reply({ ...view, flags: MessageFlags.Ephemeral })
 }
 
 const outfitArt = (opId: string, o: Outfit) =>
@@ -2205,16 +2280,17 @@ const outfitArt = (opId: string, o: Outfit) =>
 function outfitListEmbed(op: Op, list: Outfit[]): EmbedBuilder {
   const page = `${MYRTLE}/operators/${op.id}`
   const lines = list.map(o => {
-    const tags = [o.animated ? '✨ animated' : '', o.chibi.length ? '🐾 chibi' : ''].filter(Boolean).join(' · ')
-    const meta = o.elite !== undefined ? o.obtain : [o.line, o.obtain, o.artist && `art: ${o.artist}`].filter(Boolean).join(' · ')
-    return `**${o.name}**${tags ? ` (${tags})` : ''}\n${meta}`
+    const has = [o.animated ? 'animated art' : '', o.chibi.length ? 'chibi' : ''].filter(Boolean).join(', ')
+    const meta = o.elite !== undefined ? o.obtain : [o.line, o.obtain, o.artist && `art by ${o.artist}`].filter(Boolean).join(' · ')
+    return `**${o.name}**${has ? ` · *${has}*` : ''}\n${meta}`
   })
   const newest = [...list].filter(o => o.elite === undefined).pop() ?? list[list.length - 1]
   const e = embed(`${op.name} · Outfits (${list.length})`)
     .setURL(page)
-    .setDescription(clip(lines.join('\n'), 3800) + `\n\nUse \`/skin operator:${op.name} outfit:<name>\` to see one outfit's art.`)
+    .setDescription(
+      clip(lines.join('\n'), 3600) + '\n\nPick an outfit from the menu below to see its art. **Chibi player** opens Myrtle, which plays chibis and animated art live and can save them as GIF or WebM.',
+    )
     .setImage(outfitArt(op.id, newest))
-    .addFields({ name: 'Animated art and chibis', value: 'Press **▶ Chibi player** below. Myrtle plays them live, and you can download a GIF or WebM there.' })
     .setFooter({ text: `${FOOTER} · Picture: ${newest.name} · Art © Hypergryph/Yostar, hosted by myrtle.moe` })
   return e
 }
@@ -2234,22 +2310,9 @@ async function cmdSkin(i: ChatInputCommandInteraction, eph: boolean) {
     const n = normName(want)
     const o = list.find(x => x.id === want) ?? list.find(x => normName(x.name) === n) ?? list.find(x => normName(x.name).includes(n))
     if (!o) return fail(i, `**${op.name}** has no outfit matching "${clip(want, 60)}". Outfits: ${list.map(x => x.name).join(', ')}`)
-    const e = embed(`${op.name} · ${o.name}`)
-      .setURL(page)
-      .setDescription([o.line && `*${o.line}*`].filter(Boolean).join('\n') || null)
-      .setImage(outfitArt(op.id, o))
-      .setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${op.id}.png`)
-    if (o.artist) e.addFields({ name: 'Artist', value: o.artist, inline: true })
-    if (o.obtain) e.addFields({ name: 'How to get', value: o.obtain, inline: true })
-    if (o.time && o.elite === undefined) e.addFields({ name: 'Released (EN)', value: `<t:${o.time}:D>`, inline: true })
-    e.addFields(
-      { name: 'Animated art', value: o.animated ? 'Yes · view it on Myrtle' : 'No', inline: true },
-      { name: 'Chibi animations', value: o.chibi.length ? o.chibi.join(', ') : 'Not available', inline: true },
-    )
-    e.setFooter({ text: `${FOOTER} · Chibi player on Myrtle: download as GIF/WebM there · Art © Hypergryph/Yostar` })
-    return i.editReply({ embeds: [e], components: skinButtons(op, o) })
+    return i.editReply({ embeds: [outfitEmbed(op, o)], components: skinButtons(op, o, list) })
   }
-  return i.editReply({ embeds: [outfitListEmbed(op, list)], components: skinButtons(op) })
+  return i.editReply({ embeds: [outfitListEmbed(op, list)], components: skinButtons(op, undefined, list) })
 }
 
 // ───────────────────────── /links /help ─────────────────────────
@@ -2355,7 +2418,7 @@ const HELP: HelpEntry[] = [
     short: 'Operator outfits: art, artist, how to get, animated/chibi',
     usage: '/skin operator:<operator> [outfit:<outfit>]',
     detail:
-      'Without outfit: lists every outfit (default E0/E2 and all skins) with its line, how to get it and the artist, and marks which have animated art and chibi animations. With outfit: shows that outfit’s full official art, artist, release date and links. Outfits autocomplete once the operator is filled in. Animated art and chibis are viewed on the operator’s Myrtle page, which plays them live.',
+      'Without outfit: a menu to pick any outfit, and a list of every outfit (default E0/E2 and all skins) with its line, how to get it and the artist, and marks which have animated art and chibi animations. With outfit: shows that outfit’s full official art, artist, release date and links. Outfits autocomplete once the operator is filled in. Animated art and chibis are viewed on the operator’s Myrtle page, which plays them live.',
     examples: ['/skin operator: Reed the Flame Shadow', '/skin operator: Reed the Flame Shadow outfit: Summer Flowers FA075', '/skin operator: Necrass outfit: Default outfit (Elite 2)'],
   },
   {
@@ -2430,7 +2493,7 @@ const HELP: HelpEntry[] = [
     group: 'Utilities',
     short: 'This guide',
     usage: '/help [command:<name>]',
-    detail: 'With no option: the list of all commands. With a command: details and examples.',
+    detail: "With no option: the list of all commands, with a menu to open any command's details. With a command: details and examples.",
     examples: ['/help', '/help command: recruit'],
   },
 ]
@@ -2446,46 +2509,45 @@ export function registerHelp(entries: HelpEntry[]): void {
   fillHelpChoices()
 }
 
+function helpDetail(h: HelpEntry): EmbedBuilder {
+  const e = embed(h.cmd === 'links' ? 'Useful sites' : `/${h.cmd}`)
+    .setDescription(h.detail)
+    .addFields({ name: 'Usage', value: '`' + h.usage + '`' }, { name: 'Examples', value: h.examples.map(x => '`' + x + '`').join('\n') || '—' })
+  if (!/\(AI\)/.test(h.group)) e.setFooter({ text: `${FOOTER} · Answered instantly by the bot (no AI)` })
+  return e
+}
+
+function helpMenu(): ActionRowBuilder<StringSelectMenuBuilder> {
+  return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId('ark:help')
+      .setPlaceholder('Details and examples for a command…')
+      .addOptions(HELP.slice(0, 25).map(h => ({ label: h.cmd === 'links' ? 'Useful sites' : `/${h.cmd}`, value: h.cmd, description: clip(h.short, 100) }))),
+  )
+}
+
 async function cmdHelp(i: ChatInputCommandInteraction, eph: boolean) {
   const which = i.options.getString('command')
   if (which) {
     if (which === 'links') return i.reply({ embeds: [linksEmbed()], flags: ephFlag(eph) })
     const h = HELP.find(x => x.cmd === which)
-    if (h) {
-      const e = embed(`/${h.cmd}`)
-        .setDescription(h.detail)
-        .addFields({ name: 'Usage', value: '`' + h.usage + '`' }, { name: 'Examples', value: h.examples.map(x => '`' + x + '`').join('\n') })
-      if (!/\(AI\)/.test(h.group)) e.setFooter({ text: `${FOOTER} · Answered instantly by the bot (no AI)` })
-      return i.reply({ embeds: [e], flags: ephFlag(eph) })
-    }
+    if (h) return i.reply({ embeds: [helpDetail(h)], flags: ephFlag(eph) })
   }
-  const e = embed('PRTS function list').setDescription(
-    'All systems operational. Welcome home.\n`[ ]` = optional. Every command also has `private:` so that only you see the reply.\nFor details and examples: `/help command:<name>`.',
+  const e = embed('Function list').setDescription(
+    'All systems operational. Welcome home.\nPick a command from the menu below for its options and examples. Every command also has `private:`, so that only you see the reply.',
   )
-  const groups = [...new Set(HELP.map(h => h.group))]
-  for (const g of groups) {
-    // Discord caps a field at 1024 characters, so long groups continue in a second field.
-    let chunk: string[] = [],
-      first = true
-    const flush = () => {
-      if (chunk.length) e.addFields({ name: first ? g : `${g} (cont.)`, value: chunk.join('\n') })
-      chunk = []
-      first = false
-    }
-    for (const h of HELP.filter(x => x.group === g)) {
-      const line = h.cmd === 'links' ? `**Useful sites** · ${h.short}\n\`${h.usage}\`` : `**/${h.cmd}** · ${h.short}\n\`${clip(h.usage, 90)}\``
-      if ([...chunk, line].join('\n').length > 1000) flush()
-      chunk.push(line)
-    }
-    flush()
+  for (const g of [...new Set(HELP.map(h => h.group))]) {
+    const lines = HELP.filter(x => x.group === g).map(h => (h.cmd === 'links' ? `**Useful sites** · \`/help command: links\`` : `**/${h.cmd}** · ${h.short}`))
+    e.addFields({ name: g, value: clip(lines.join('\n'), 1024) })
   }
   e.setFooter({ text: `${FOOTER} · Commands marked (AI) use the AI; everything else is answered instantly by the bot` })
-  return i.reply({ embeds: [e], flags: ephFlag(eph) })
+  return i.reply({ embeds: [e], components: [helpMenu()], flags: ephFlag(eph) })
 }
 
 // ───────────────────────── dispatch ─────────────────────────
 
 export async function handleArk(i: ChatInputCommandInteraction): Promise<void> {
+  brand(i, SECTION[i.commandName])
   const eph = i.options.getBoolean('private') ?? false
   switch (i.commandName) {
     case 'roll': {
