@@ -1060,22 +1060,6 @@ function tierText(o: Op, sh: Sheets | null): string | null {
   return t?.length ? t.join(', ') : null
 }
 
-/** One module on the /operator card: what it does, its stats, and the community rating in words. */
-function moduleCardText(m: OpModule, r?: string[]): string {
-  const out: string[] = []
-  const fx = m.fx
-  if (fx?.trait) out.push(`**Stage 1, ${fx.trait.kind === 'add' ? 'trait bonus' : 'new trait'}:** ${clip(fx.trait.text, 300)}`)
-  const st = fx ? statLine(fx.stats) : ''
-  if (st) out.push(`**Stats (stage 1 → ${fx?.stats.length ?? 3}):** ${st}`)
-  for (const t of fx?.talents ?? []) out.push(`**Stages 2–3, talent "${t.name}":** ${clip(t.text, 420)}`)
-  if (!fx && r?.[3]) out.push(clip(r[3], 300))
-  if (r) {
-    const bits = [gradeWord(r[4]) && `rated ${gradeWord(r[4])}`, gradeWord(r[5]) && `value for materials ${gradeWord(r[5])}`, recLevel(r[6])].filter(Boolean)
-    if (bits.length) out.push(`**Community verdict:** ${bits.join(' · ')}`)
-  }
-  return out.join('\n') || 'No effect data yet.'
-}
-
 /** The /operator card (also served by `ark:op:<id>`). */
 function operatorCard(o: Op): { embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder>[] } {
   const sh = loadSheets()
@@ -1199,66 +1183,92 @@ async function cmdTier(i: ChatInputCommandInteraction, eph: boolean) {
 // ───────────────────────── /module ─────────────────────────
 
 /** The Modules button: what each module does (game data) and the community verdict. */
-function moduleDetailEmbed(o: Op): EmbedBuilder {
+/** One module per page (`ark:modv:<operator id>:<index>:<fx|review>`), with buttons to switch module and tab. */
+function moduleView(o: Op, idx: number, tab: string): { embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder>[] } {
   const rated = loadSheets()?.modules.get(normName(o.name)) ?? []
-  const e = embed(`Modules: ${o.name}`)
+  const mods = o.modules.slice(0, 5)
+  const m = mods[Math.min(Math.max(idx, 0), mods.length - 1)]
+  const r = m ? ratingRow(m, rated) : undefined
+  const e = embed(m ? `${m.type} · ${m.name}` : `Modules: ${o.name}`)
     .setURL(wikiUrl(o.name))
     .setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${o.id}.png`)
-    .setDescription(`Optional upgrades unlocked at ${o.modules[0]?.unlock ?? 'Elite 2'}. Stage 1 changes the class trait and adds stats; stages 2 and 3 improve a talent.`)
-    .setFooter({ text: `${FOOTER} · Effects from EN game data · Verdicts from DragonGJY's module ratings (fan-made, CN-based)` })
-  for (const m of o.modules.slice(0, 6)) e.addFields({ name: `${m.type} · ${m.name}${m.form ? ` (${m.form})` : ''}`, value: clip(moduleCardText(m, ratingRow(m, rated)), 1024) })
-  return e
-}
-
-function moduleEmbed(o: Op): EmbedBuilder {
-  const sh = loadSheets()
-  const name = o.name
-  const rows = sh?.modules.get(normName(name)) ?? []
-  const e = embed(`Module ratings: ${name}`).setFooter({ text: `DragonGJY module ratings (fan-made, based on CN) · checked ${sheetDate('module-ratings-dragongjy.txt')}` })
-  if (!rows.length) {
-    const mods = o.modules.map(m => `**${m.type}** ${m.name}`).join('\n')
-    e.setDescription(`No rating found in the module sheet.${mods ? `\n\nModules in game data:\n${mods}` : ''}`).setColor(COLOR.dim)
-  } else {
-    e.setDescription("One player's ratings of every module, written for the CN server, so treat them as a guide. Grades go S (best), A, B, C.")
-    const bullets = (t: string) =>
+  if (!m) return { embeds: [e.setDescription('No modules on record.')], components: [] }
+  e.setDescription(`**${o.name}** · module ${mods.indexOf(m) + 1} of ${mods.length}${m.form ? ` · ${m.form}` : ''} · unlocks at ${m.unlock ?? 'Elite 2'}`)
+  if (tab === 'review' && r) {
+    const [, arch, , quick, mr, ic, lv, , pros, cons] = r
+    const points = (t: string) =>
       (t ?? '')
         .split(/(?:^|\s)-\s+/)
         .map(x => x.trim())
         .filter(Boolean)
-        .map(x => `• ${x}`)
+        .slice(0, 4)
+        .map(x => `• ${clip(x, 170)}`)
         .join('\n')
-    for (const r of rows.slice(0, 6)) {
-      const [, arch, mod, quick, mr, ic, lv, pri, pros, cons] = r
-      const verdict = [gradeWord(mr) && `Rating: ${gradeWord(mr)}`, gradeWord(ic) && `Value for materials: ${gradeWord(ic)}`, gradeWord(pri) && `Priority: ${gradeWord(pri)}`].filter(Boolean)
-      const rec = recLevel(lv)
-      e.addFields({
-        name: `Module ${mod.trim()} · ${arch.trim()}`,
-        value: clip([`*${quick.trim()}*`, verdict.join(' · '), rec ? `Recommended: ${rec}` : '', `**Pros**\n${bullets(pros)}`, `**Cons**\n${bullets(cons)}`].filter(Boolean).join('\n'), 1024),
-      })
-    }
+    e.addFields(
+      { name: 'In short', value: clip(quick.trim(), 300) },
+      {
+        name: 'Verdict',
+        value:
+          [gradeWord(mr) && `Rated **${gradeWord(mr)}**`, gradeWord(ic) && `value for materials **${gradeWord(ic)}**`].filter(Boolean).join(' · ') +
+          (recLevel(lv) ? `\nRecommended: ${recLevel(lv)}` : ''),
+      },
+    )
+    if (points(pros)) e.addFields({ name: 'Pros', value: clip(points(pros), 1024) })
+    if (points(cons)) e.addFields({ name: 'Cons', value: clip(points(cons), 1024) })
+    e.setFooter({ text: `DragonGJY module ratings (fan-made, CN-based, ${arch.trim()}) · checked ${sheetDate('module-ratings-dragongjy.txt')}` })
+  } else {
+    const fx = m.fx
+    if (fx?.trait) e.addFields({ name: `Stage 1 · ${fx.trait.kind === 'add' ? 'trait bonus' : 'new trait'}`, value: clip(fx.trait.text, 400) })
+    const st = fx ? statLine(fx.stats) : ''
+    if (st) e.addFields({ name: `Stats · stage 1 → ${fx?.stats.length ?? 3}`, value: st })
+    for (const t of fx?.talents ?? []) e.addFields({ name: `Stages 2–3 · ${t.name}`, value: clip(t.text, 450) })
+    if (!fx) e.addFields({ name: 'Effect', value: r?.[3] ? clip(r[3], 300) : 'No effect data yet.' })
+    if (r) e.addFields({ name: 'Verdict', value: [gradeWord(r[4]) && `Rated **${gradeWord(r[4])}**`, recLevel(r[6])].filter(Boolean).join(' · ') })
+    e.setFooter({ text: `${FOOTER} · Effects from EN game data · Verdict from DragonGJY (fan-made)` })
   }
-  return e
+  const at = mods.indexOf(m)
+  const rows = [
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      mods.map((x, k) =>
+        new ButtonBuilder()
+          .setCustomId(`ark:modv:${o.id}:${k}:${tab}`)
+          .setLabel(x.type)
+          .setStyle(k === at ? ButtonStyle.Primary : ButtonStyle.Secondary)
+          .setDisabled(k === at),
+      ),
+    ),
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`ark:modv:${o.id}:${at}:fx`)
+        .setLabel('Effects')
+        .setStyle(tab !== 'review' || !r ? ButtonStyle.Primary : ButtonStyle.Secondary)
+        .setDisabled(tab !== 'review' || !r),
+      new ButtonBuilder()
+        .setCustomId(`ark:modv:${o.id}:${at}:review`)
+        .setLabel('Community review')
+        .setStyle(tab === 'review' && r ? ButtonStyle.Primary : ButtonStyle.Secondary)
+        .setDisabled(!r || tab === 'review'),
+    ),
+  ]
+  return { embeds: [e], components: mods.length > 1 ? rows : rows.slice(1) }
 }
 
 /** Buttons under /operator (`ark:<what>:<operator id>`): details, shown privately to whoever presses. */
 export async function handleArkButton(i: ButtonInteraction): Promise<void> {
-  const m = /^ark:(mod|modpc|skin|base|op):(.+)$/.exec(i.customId)
+  const m = /^ark:(mod|modpc|modv|skin|base|op):(.+)$/.exec(i.customId)
   ensureData()
-  const o = m && opIndex()?.byId.get(m[2])
+  const o = m && opIndex()?.byId.get(m[2].split(':')[0])
   if (!m || !o) {
     await i.reply({ content: '[PRTS] That record is no longer available. I apologize.', flags: MessageFlags.Ephemeral })
     return
   }
   const eph = MessageFlags.Ephemeral
-  brand(i, { mod: SECTION.operator, modpc: SECTION.operator, op: SECTION.operator, skin: SECTION.skin, base: SECTION.base }[m[1]])
-  if (m[1] === 'mod') {
-    const rated = loadSheets()?.modules.get(normName(o.name)) ?? []
-    const components = rated.length
-      ? [new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(`ark:modpc:${o.id}`).setStyle(ButtonStyle.Secondary).setLabel('Community pros and cons'))]
-      : []
-    await i.reply({ embeds: [moduleDetailEmbed(o)], components, flags: eph })
-  } else if (m[1] === 'modpc') {
-    await i.reply({ embeds: [moduleEmbed(o)], flags: eph })
+  brand(i, { mod: SECTION.operator, modpc: SECTION.operator, modv: SECTION.operator, op: SECTION.operator, skin: SECTION.skin, base: SECTION.base }[m[1]])
+  if (m[1] === 'mod' || m[1] === 'modpc' || m[1] === 'modv') {
+    const [, idx, tab] = /^[^:]+(?::(\d+):(\w+))?$/.exec(m[2].replace(/^[^:]+/, 'x')) ?? []
+    const view = moduleView(o, Number(idx ?? 0), tab ?? (m[1] === 'modpc' ? 'review' : 'fx'))
+    if (m[1] === 'modv' && i.message?.flags?.has(MessageFlags.Ephemeral)) await i.update(view)
+    else await i.reply({ ...view, flags: eph })
   } else if (m[1] === 'op') {
     await i.reply({ ...operatorCard(o), flags: eph })
   } else if (m[1] === 'base') {
@@ -2396,7 +2406,7 @@ const HELP: HelpEntry[] = [
     short: 'Operator card: class, faction, tier, modules, art, links',
     usage: '/operator name:<operator>',
     detail:
-      'Shows a compact card like the wiki infobox: rarity, class, branch, position, faction, trait, summons, tags, how to get them, tier (AK Tier List), alternate versions, their modules with a rating, and E2 art. Buttons open the details privately: **Modules** (what each module does in plain words, its stats, and the DragonGJY verdict, with a further button for pros and cons), **Outfits** (like /skin) and **Base skills** (like /base), plus links to the wiki, Myrtle, story records and voice lines. Names autocomplete as you type. For non-operators (NPCs) it shows a wiki summary and their story appearances.',
+      'Shows a compact card like the wiki infobox: rarity, class, branch, position, faction, trait, summons, tags, how to get them, tier (AK Tier List), alternate versions, their modules with a rating, and E2 art. Buttons open the details privately: **Modules** (one module per page with buttons to switch: what it does in plain words, its stats and the DragonGJY verdict, plus a Community review tab with pros and cons), **Outfits** (like /skin) and **Base skills** (like /base), plus links to the wiki, Myrtle, story records and voice lines. Names autocomplete as you type. For non-operators (NPCs) it shows a wiki summary and their story appearances.',
     examples: ['/operator name: Texas', '/operator name: Wang'],
   },
   {

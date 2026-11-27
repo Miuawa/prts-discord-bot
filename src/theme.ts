@@ -41,12 +41,12 @@ export function stampEmbeds(payload: unknown, section: string): unknown {
   return payload
 }
 
-type Replies = { reply: Function; editReply: Function; followUp: Function }
+type Replies = { reply: Function; editReply: Function; followUp: Function; update?: Function }
 /** Wraps an interaction so every reply it sends carries the section header. */
 export function brand<T>(i: T, section: string | undefined): T {
   if (!section) return i
   const r = i as unknown as Replies
-  for (const k of ['reply', 'editReply', 'followUp'] as const) {
+  for (const k of ['reply', 'editReply', 'followUp', 'update'] as const) {
     const orig = r[k]
     if (typeof orig !== 'function') continue
     r[k] = (p: unknown, ...rest: unknown[]) => orig.call(i, stampEmbeds(p, section), ...rest)

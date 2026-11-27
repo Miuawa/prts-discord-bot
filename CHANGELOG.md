@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `/operator` Modules view shows one module per page, with a button per module and an Effects /
+  Community review switch, instead of every module in one long embed.
 - `/operator` profile reads like the wiki infobox: class, branch, position, faction, trait, summons,
   tags, how to get, tier and alternate versions, plus Amiya's forms.
 - One PRTS look for every reply: a "PRTS · <module>" header (Operator Archives, Combat Records,
