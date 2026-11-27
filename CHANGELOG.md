@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `/enemy` shows the character portrait for enemies with a wiki character page (Jesselton
+  Williams, Yurodstvo, Patriot...), with buttons for their other looks and a Character page link.
 - `/myrtle enemies` is gone: enemy handbook progress is now a line in `/myrtle profile`, and enemy
   details are `/enemy`.
 - New `/enemy`: an enemy's handbook entry (class, type, stats with the stronger stage levels,

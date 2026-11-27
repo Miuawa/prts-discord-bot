@@ -58,3 +58,15 @@ test('parses the handbook and battle stats', () => {
   expect(e.stronger).toEqual([{ hp: 2000 }])
   expect(statLines(e.stats!)[0]).toBe('**HP** 1,000 · **ATK** 200 · **DEF** 50 · **RES** 20')
 })
+
+test('reads NPC portraits from the wiki infobox', async () => {
+  const { parseInfoboxImages } = await import('../src/arkplus.ts')
+  const npc = '{{NPC tab}}\n{{Character infobox\n|name = Jesselton Williams\n|image = \nJesselton Williams jailer.png:Jailer;\nJesselton Williams killer.png:Killer;\n|othername = X\n}}'
+  expect(parseInfoboxImages(npc)).toEqual([
+    { file: 'Jesselton Williams jailer.png', label: 'Jailer' },
+    { file: 'Jesselton Williams killer.png', label: 'Killer' },
+  ])
+  const op = '{{Operator infobox\n|name = Talulah\n|image = \nTalulah.png:Base;\nTalulah Elite 2.png:Elite 2\n|cnname = x}}'
+  expect(parseInfoboxImages(op)).toEqual([{ file: 'Talulah.png', label: 'Operator art' }])
+  expect(parseInfoboxImages('no infobox')).toEqual([])
+})
