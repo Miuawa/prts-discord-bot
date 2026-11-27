@@ -882,6 +882,7 @@ const CHOSEN_PORTRAIT: Record<string, { file: string; page: string; note?: strin
   enemy_1582_suisho: { file: '70 i07.png', page: 'Sui' },
   enemy_1583_suizzh: { file: '70 i07.png', page: 'Sui' },
   enemy_1584_suiyzh: { file: '70 i07.png', page: 'Sui' },
+  enemy_2119_dyshhj: { file: '70 i07.png', page: 'Sui' }, // 'Sui' (Sui's Garden of Grotesqueries)
   enemy_2039_syskad: { file: 'Skadi the Corrupting Heart.png', page: 'Skadi the Corrupting Heart', note: 'Shown as Skadi the Corrupting Heart' }, // Ishar'mla (wiki has only a sea scene)
   // The Deathless Black Snake fights in Talulah's body, so show what the player faces.
   enemy_1515_bsnake: { file: 'Talulah (Act I).png', page: 'Talulah', note: "Appears in Talulah's body" },
