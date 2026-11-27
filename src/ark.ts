@@ -2219,8 +2219,25 @@ async function cmdMyrtle(i: ChatInputCommandInteraction, eph: boolean) {
     const e = embed(`${tag(u)} · Showcase`)
       .setURL(`${myrtleUrl(u.uid)}?tab=showcase`)
       .setThumbnail(myrtleAvatar(u.avatar_id))
+    // Grids and tier lists get their own picture (Myrtle's preview image), up to Discord's 10 embeds.
+    const previews: EmbedBuilder[] = []
     for (const b of blocks.slice(0, 20)) {
       const t = b.block?.type
+      if ((t === 'grid' || t === 'tier_list') && b.block.slug && previews.length < 9) {
+        const slug = encodeURIComponent(String(b.block.slug))
+        previews.push(
+          embed(
+            `${t === 'grid' ? 'Grid' : 'Tier list'} · ${clip(
+              String(b.block.slug)
+                .replace(/-(?=[a-z0-9]*\d)[a-z0-9]{6}$/, '')
+                .replace(/-/g, ' '),
+              80,
+            )}`,
+          )
+            .setURL(`${MYRTLE}/${t === 'grid' ? 'grids' : 'tier-lists'}/${slug}`)
+            .setImage(`${MYRTLE}/api/og/${t === 'grid' ? 'grid-image' : 'tier-list'}/${slug}`),
+        )
+      }
       if (t === 'favourites') {
         const names = (b.entities ?? []).map(x => fixText(x.entity?.name ?? x.id.replace(/^(char|enemy)_\d+_/, '')))
         e.addFields({ name: `${KINDS[b.block.entity_kind] ?? 'Favourites'} (${names.length})`, value: clip(names.join(' · ') || '—', 1000) })
@@ -2229,7 +2246,8 @@ async function cmdMyrtle(i: ChatInputCommandInteraction, eph: boolean) {
       else if (t === 'plan') e.addFields({ name: 'Plan', value: `${opName(String(b.block.operator_id ?? ''))} · [Showcase](${myrtleUrl(u.uid)}?tab=showcase)` })
     }
     e.setFooter({ text: `${FOOTER} · Data from myrtle.moe` })
-    return i.editReply({ embeds: [e] })
+    for (const p of previews) p.setFooter({ text: `${FOOTER} · Preview from myrtle.moe` })
+    return i.editReply({ embeds: [e, ...previews] })
   }
 
   const roster: MRosterOp[] = (await myrtleGet(`roster?uid=${u.uid}`).catch(() => null)) ?? []
