@@ -30,24 +30,43 @@ const PREAMBLE = [
   'Discord shows about 2000 characters per message; keep answers short (a few sentences) unless asked for more.',
 ].join('\n')
 
+let characterOf: (username: string) => string | undefined = () => undefined
+/** Lets the bot tell the /prts chat which character each Discord username plays. */
+export function setCharacterLookup(fn: (username: string) => string | undefined): void {
+  characterOf = fn
+}
+
+/** How PRTS addresses this person: their character's name, else "Doctor". */
+function addressFor(m: Record<string, string | undefined>): string {
+  return (m.user && characterOf(m.user)) || 'Doctor'
+}
+
 /** One opening line, the way PRTS greets the Doctor in the game, from the bot's visit notes. */
 function greeting(m: Record<string, string | undefined>): string {
+  const who = addressFor(m)
   const hour = Number(/ (\d\d):/.exec(m.local_time ?? '')?.[1] ?? NaN)
   const tod = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'
   const line = m.first_visit
-    ? '"Identity verification complete. Welcome to the Primitive Rhodes Island Terminal Service, Doctor."'
+    ? `"Identity verification complete. Welcome to the Primitive Rhodes Island Terminal Service, ${who}."`
     : m.away_for
-      ? `"Welcome home, Doctor. Since your last visit, it has been ${m.away_for}."`
+      ? `"Welcome home, ${who}. Since your last visit, it has been ${m.away_for}."`
       : m.first_visit_today
-        ? `"${Number.isFinite(hour) ? tod : 'Welcome home'}, Doctor."`
+        ? `"${Number.isFinite(hour) ? tod : 'Welcome home'}, ${who}."`
         : ''
   return line ? `\n\nThis is the person's first message ${m.first_visit ? 'ever' : m.away_for ? 'in a long time' : 'today'}: open with ${line} on its own line, then answer.` : ''
 }
 
 export const CHAT_HOOKS: TurnHooks = {
   key: 'prts',
+  speaker: u => characterOf(u) ?? u,
   prompt(ev) {
-    if (ev.meta.style === 'normal') return { system: `${PREAMBLE}\n\nAnswer as a plain, friendly assistant. No persona, no system phrases. Answer directly and concisely.` }
-    return { system: `${PREAMBLE}\n\n${persona()}${greeting(ev.meta)}` }
+    if (ev.meta.style === 'normal')
+      return { system: `${PREAMBLE}\n\nAnswer as a plain, friendly assistant. No persona, no system phrases, and do not call the person by a roleplay character name. Answer directly and concisely.` }
+    const who = addressFor(ev.meta)
+    const address =
+      who === 'Doctor'
+        ? ''
+        : `\n\nThis person plays ${who} in the server's roleplay. PRTS recognises every player as their character: address and identify them as ${who} wherever the rules above say "Doctor" (for example "Welcome home, ${who}."). Never use their Discord username.`
+    return { system: `${PREAMBLE}\n\n${persona()}${address}${greeting(ev.meta)}` }
   },
 }

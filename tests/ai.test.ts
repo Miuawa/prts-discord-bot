@@ -232,3 +232,17 @@ describe('images', () => {
     expect(withEnv({ K_VISION: 'off' }, () => readAiConfig('K')).vision).toBe('off')
   })
 })
+
+import { CHAT_HOOKS, setCharacterLookup } from '../src/ai/chat.ts'
+describe('/prts on an API model', () => {
+  test('addresses players by their character, others as Doctor', () => {
+    setCharacterLookup(u => (u === 'player_one' ? 'Amiya' : undefined))
+    const sys = (user: string, extra = {}) => CHAT_HOOKS.prompt({ content: 'hi', meta: { user, ...extra } }, '').system
+    expect(sys('player_one', { first_visit_today: 'true', local_time: 'Friday 09:10' })).toContain('"Good morning, Amiya."')
+    expect(sys('player_one')).toContain('address and identify them as Amiya')
+    expect(sys('stranger', { first_visit: 'true' })).toContain('Terminal Service, Doctor."')
+    expect(CHAT_HOOKS.speaker!('player_one')).toBe('Amiya')
+    expect(sys('player_one', { style: 'normal' })).not.toContain('Amiya')
+    setCharacterLookup(() => undefined)
+  })
+})

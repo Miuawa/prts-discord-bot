@@ -51,6 +51,7 @@ export default function roleplay(): PrtsModule {
       clean: process.env.RP_STRIP_PLAYER_LINES === 'off' ? undefined : stripPlayerLines,
       after: appendStoryLog,
     },
+    characterOf: username => readPlayers().find(([u]) => u.toLowerCase() === username.toLowerCase())?.[1],
     init(client) {
       setInterval(() => void nudgeTick(client).catch(() => {}), 60_000).unref()
     },

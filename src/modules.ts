@@ -47,6 +47,8 @@ export interface PrtsModule {
    * return nothing, or return an AiRequest to pass it to the AI (the bot shows "thinking...").
    */
   onCommand?(i: ChatInputCommandInteraction, client: Client): Promise<AiRequest | void>
+  /** The character a Discord username plays (for example from a roleplay roster), so PRTS can address them by it. */
+  characterOf?(username: string): string | undefined
   /** Every reply the bot posts for the AI (any backend), with its channel id. */
   onReply?(channelId: string, text: string): void
 }

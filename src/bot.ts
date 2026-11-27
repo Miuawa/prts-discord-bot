@@ -50,7 +50,7 @@ import { ARKPLUS_COMMANDS, ARKPLUS_NAMES, handleArkPlus, handleArkPlusAutocomple
 import { readAiConfig, aiAvailable, apiBackendFor, describeBackend, type AiConfig } from './ai/config.ts'
 import { handleApiTurn, recordUser, recordAssistant, type TurnHooks } from './ai/turns.ts'
 import { probe } from './ai/providers.ts'
-import { CHAT_HOOKS } from './ai/chat.ts'
+import { CHAT_HOOKS, setCharacterLookup } from './ai/chat.ts'
 import { imageRefs, type ImageRef } from './ai/images.ts'
 import { loadModules, type PrtsModule, type AiRequest } from './modules.ts'
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync, renameSync, realpathSync } from 'fs'
@@ -97,6 +97,13 @@ for (const m of MODULES) for (const c of (m.commands ?? []) as { name: string }[
 for (const m of MODULES) if (m.help?.length) registerHelp(m.help)
 const aiFor = (m?: PrtsModule): AiConfig => m?.ai ?? CORE_AI
 const hooksFor = (m?: PrtsModule): TurnHooks => (m?.turns ? { key: m.name, ...m.turns } : CHAT_HOOKS)
+// /prts on an API model addresses players by their character, from the first module that knows them.
+setCharacterLookup(u => {
+  for (const m of MODULES) {
+    const c = m.characterOf?.(u)
+    if (c) return c
+  }
+})
 /** The module that owns a channel (threads count as their parent), and its state. */
 function channelOwner(channelId: string): { mod: PrtsModule; state: 'active' | 'paused' } | null {
   for (const mod of MODULES) {
