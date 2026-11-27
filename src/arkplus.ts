@@ -849,7 +849,7 @@ async function infoboxOf(page: string): Promise<{ title: string; box: ReturnType
 
 type EnemyWiki = { enemyPage?: string; character?: string; portrait?: string; note?: string }
 /** Enemies that should show no portrait (Hierda's review, 2026-11-27): the wiki art does not show them. */
-const NO_PORTRAIT = new Set(['enemy_2018_csdoll']) // Big Sad Lock
+const NO_PORTRAIT = new Set(['enemy_2018_csdoll', 'enemy_2039_syskad']) // Big Sad Lock; Ishar'mla (only a sea scene)
 /** Portraits the wiki cannot tell apart (checked by hand): enemy id -> infobox image file. */
 const PORTRAIT_OVERRIDE: Record<string, string> = {
   enemy_2078_skzmst: 'Mon3tr original.png', // Mon2tr is Mon3tr's original form, not the humanoid operator art
