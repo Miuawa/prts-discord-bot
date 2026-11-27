@@ -857,6 +857,13 @@ const PORTRAIT_OVERRIDE: Record<string, string> = {
 const CHOSEN_PORTRAIT: Record<string, { file: string; page: string; note: string }> = {
   enemy_1002_nsabr: { file: 'Reunion Soldier A.png', page: 'Reunion', note: 'Generic Reunion story art' }, // Soldier
   enemy_1011_wizard: { file: 'Reunion Caster.png', page: 'Reunion', note: 'Generic Reunion story art' }, // Caster
+  enemy_1189_krgaxe: { file: 'Kjerag Warrior A.png', page: 'Kjerag', note: 'Generic Kjerag story art' }, // Icefield Warrior
+  enemy_10124_uashld: { file: 'Ursus Shieldguard.png', page: 'Ursus', note: 'Generic Ursus story art' }, // Army Shieldguard
+  enemy_1086_ltsodr: { file: 'Leithanian Rebel.png', page: 'Leithanien', note: 'Generic Leithanien story art' }, // Leithanian Rebel
+  enemy_1241_ltmage: { file: 'Female Spire Caster.png', page: 'Leithanien', note: 'Generic Leithanien story art' }, // Spire Caster
+  enemy_1055_ganman: { file: 'Mafioso.png', page: 'Siracusa', note: 'Generic Siracusa story art' }, // Sicilian
+  enemy_1277_sgman: { file: 'Siracusan Mafioso A.png', page: 'Siracusa', note: 'Generic Siracusa story art' }, // Famiglia Soldier
+  enemy_10043_sailor: { file: 'Male Iberian Pirate A.png', page: 'Iberia', note: 'Generic Iberia story art' }, // Risk-seeking Sailor
   // The Deathless Black Snake fights in Talulah's body, so show what the player faces.
   enemy_1515_bsnake: { file: 'Talulah (Act I).png', page: 'Talulah', note: "Appears in Talulah's body" },
 }
@@ -875,7 +882,7 @@ export function enemyCharacter(title: string, wikitext: string): { page: string;
 
 /** The enemy's own wiki page (found by its game id), the character it shows, and their portrait:
  * from the story tab first, then from the character the page links to. Operator pages keep the NPC art on "<page>/Story". */
-async function enemyWiki(e: Enemy): Promise<EnemyWiki> {
+export async function enemyWiki(e: Enemy): Promise<EnemyWiki> {
   const hit = enemyWikiCache.get(e.id)
   if (hit && Date.now() - hit.at < 12 * 3600_000) return hit.value
   const value: EnemyWiki = {}
@@ -919,6 +926,11 @@ async function enemyWiki(e: Enemy): Promise<EnemyWiki> {
       if (file) value.portrait = await fileUrl(file.trim())
       if (!value.portrait) value.character = undefined
       break
+    }
+    // A hand-chosen picture still shows when the wiki has no page for the enemy.
+    if (chosen && !value.portrait) {
+      value.portrait = await fileUrl(chosen.file)
+      if (value.portrait) Object.assign(value, { character: chosen.page, note: chosen.note })
     }
   } catch {
     if (hit) return hit.value
