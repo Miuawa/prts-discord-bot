@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.2 (2026-11-28)
+
+### Changed
+- `src/ark.ts` (about 2,900 lines) is split into one file per command under `src/ark/` (`roll`, `operator`,
+  `tier`, `farm`, `recruit`, `wiki`, `story`, `base`, `skin`, `myrtle`, `help`), plus shared `definitions`,
+  `data`, `sheets`, `helpers` and `autocomplete`. `src/ark.ts` routes commands, buttons and menus to them.
+  No change in behaviour: every command, card, button and /help entry is the same.
+
 ## 0.2.1 (2026-11-28)
 
 ### Security

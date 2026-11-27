@@ -74,7 +74,7 @@ Discord ──► src/bot.ts ── instant commands, music, access control (alw
 | `src/server.ts` | MCP server Claude Code loads (from `.mcp.json`). Relays Discord events to Claude and its `reply`/`react`/`edit_message`/`fetch_messages`/`download_attachment` calls back to the bot. Connects only when `PRTS_LAUNCHER=1`. |
 | `src/ai/` | Backend settings (`config.ts`), the Anthropic and OpenAI-compatible clients (`providers.ts`), history and turn handling for API models (`turns.ts`), the `/prts` prompt (`chat.ts`). |
 | `src/modules.ts` | The module interface and loader. |
-| `src/ark.ts`, `arkplus.ts` | Arknights commands (game data from the ArknightsAssets GitHub mirror, community sheets, wiki, story reader). |
+| `src/ark.ts`, `ark/`, `arkplus.ts` | Arknights commands (game data from the ArknightsAssets GitHub mirror, community sheets, wiki, story reader). `ark.ts` routes them; `ark/` has one file per command plus the shared game data and sheets. |
 | `src/equip.ts`, `enemy.ts` | Parsing of module effects and enemy handbook data from the game tables. |
 | `src/theme.ts`, `pages.ts`, `common.ts` | The shared PRTS look (colours, header, footer), page buttons for long replies, and shared URLs and helpers. |
 | `src/visits.ts` | Visit times for PRTS-style greetings in `/prts`. |
