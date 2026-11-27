@@ -6,6 +6,12 @@
 - Nightly backups: `linux/backup.sh` with `prts-backup.timer` (03:30) saves `.env`, `cache/` and the
   Discord state folder to `~/PRTS-backups/bot/` (private, newest 7 kept, optional gpg encryption).
   `linux/install.sh` installs the units; PRTS Control shows the last backup and has Back up now.
+- Optional Docker setup (`Dockerfile`, `compose.yaml`, `docs/docker.md`): non-root, read-only,
+  no capabilities, no secrets in the image, bridge published on 127.0.0.1 only. systemd stays
+  the default. `PRTS_BRIDGE_HOST` sets the bridge address (Docker only).
+
+### Security
+- The bridge key is compared in constant time.
 
 ### Changed
 - `src/ark.ts` (about 2,900 lines) is split into one file per command under `src/ark/` (`roll`, `operator`,

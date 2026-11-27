@@ -1,0 +1,58 @@
+# Optional: run the PRTS bot in Docker instead of prts-bot.service.
+# Read docs/docker.md first. Stop the systemd bot before starting this one:
+# only one PRTS bot can run (the second one finds the bridge port taken).
+#
+#   docker compose up -d --build     start (and rebuild after a git pull)
+#   docker compose logs -f           log
+#   docker compose down              stop
+#
+# Settings stay in .env and the token in ~/.claude/channels/discord/, mounted
+# at run time; nothing private is baked into the image. Local changes (the
+# roleplay kit, other paths) go in compose.override.yaml (git ignores it), see
+# docker/compose.override.example.yaml.
+name: prts
+
+services:
+  bot:
+    build: .
+    image: prts-bot:local
+    container_name: prts-bot
+    init: true
+    restart: unless-stopped
+    # Run as you, so files the bot writes in the mounted folders stay yours.
+    user: "${PRTS_UID:-1000}:${PRTS_GID:-1000}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    mem_limit: 2g
+    environment:
+      # The story index refresh runs host tools (python, the roleplay kit's
+      # refresh.py), so it is off in the container unless you give it a command
+      # that works there.
+      PRTS_STORY_REFRESH_CMD: ${PRTS_DOCKER_STORY_REFRESH_CMD:-}
+    volumes:
+      - ./.env:/app/.env:ro
+      - ${PRTS_DISCORD_STATE_DIR:-${HOME}/.claude/channels/discord}:/state
+      - ./cache:/app/cache
+      - ./data:/app/data
+      - ${PRTS_DOCKER_MUSIC_DIR:-./music}:/app/music:ro
+    # The narrator bridge, on the host's 127.0.0.1 only (never 0.0.0.0): the
+    # Claude Code narrator on this PC connects here with the key in bridge.key.
+    ports:
+      - "127.0.0.1:${PRTS_BRIDGE_PORT:-47823}:47823"
+    # A local model on the host (llama.cpp, llama-swap, Ollama): point
+    # PRTS_LOCAL_URL / RP_BASE_URL at http://host.docker.internal:<port>/v1, and
+    # make the server listen on the Docker bridge address (172.17.0.1), not only
+    # on 127.0.0.1. See docs/docker.md.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks: [prts]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+networks:
+  prts: {}

@@ -1,0 +1,12 @@
+# Copy to compose.override.yaml (next to compose.yaml; git ignores it) and edit.
+# docker compose reads it automatically.
+services:
+  bot:
+    environment:
+      # Roleplay module: the kit is mounted below.
+      RP_KIT_DIR: /app/roleplay-kit
+      # A local model on the host (llama-swap / llama-server on 172.17.0.1:8081):
+      # PRTS_LOCAL_URL: http://host.docker.internal:8081/v1
+    volumes:
+      # Your roleplay kit (the narrator and the bot both write story logs here).
+      - ./roleplay-kit:/app/roleplay-kit

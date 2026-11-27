@@ -655,11 +655,14 @@ function onPermissionRequest(params: { request_id: string; tool_name: string; de
 //   claude → bot  {type:'call', id, name, args}          tool call → {type:'result', id, result}
 //   claude → bot  {type:'notify', method, params}        permission requests
 // Only 127.0.0.1, and only with the key from bridge.key (a credential like
-// .env: assertSendable refuses to upload it).
-import { randomBytes as bridgeRandom } from 'crypto'
+// .env: assertSendable refuses to upload it). PRTS_BRIDGE_HOST changes the
+// address for Docker, where the container listens on its own interface and
+// compose publishes the port on the host's 127.0.0.1 only.
+import { randomBytes as bridgeRandom, timingSafeEqual } from 'crypto'
 import type { ServerWebSocket } from 'bun'
 
 const BRIDGE_PORT = Number(process.env.PRTS_BRIDGE_PORT ?? 47823)
+const BRIDGE_HOST = process.env.PRTS_BRIDGE_HOST?.trim() || '127.0.0.1'
 const BRIDGE_KEY_FILE = join(STATE_DIR, 'bridge.key')
 function bridgeKey(): string {
   try {
@@ -672,6 +675,13 @@ function bridgeKey(): string {
   return k
 }
 const BRIDGE_KEY = DRY_RUN ? '' : bridgeKey()
+// Constant-time compare, so the key can't be guessed from response timing.
+function bridgeKeyMatches(given: string | null): boolean {
+  if (!given || !BRIDGE_KEY) return false
+  const a = Buffer.from(given)
+  const b = Buffer.from(BRIDGE_KEY)
+  return a.length === b.length && timingSafeEqual(a, b)
+}
 let bridge: ServerWebSocket<unknown> | null = null
 export const aiOnline = () => bridge !== null
 
@@ -730,11 +740,11 @@ function emit(n: { method: string; params: unknown }): Promise<void> {
 if (!DRY_RUN)
   try {
     Bun.serve({
-      hostname: '127.0.0.1',
+      hostname: BRIDGE_HOST,
       port: BRIDGE_PORT,
       fetch(req, srv) {
         const u = new URL(req.url)
-        if (u.searchParams.get('key') !== BRIDGE_KEY) return new Response('Insufficient permissions.', { status: 403 })
+        if (!bridgeKeyMatches(u.searchParams.get('key'))) return new Response('Insufficient permissions.', { status: 403 })
         if (srv.upgrade(req)) return undefined
         return new Response('PRTS bridge. All systems operational.')
       },
@@ -775,7 +785,7 @@ if (!DRY_RUN)
         },
       },
     })
-    process.stderr.write(`prts bot: bridge listening on 127.0.0.1:${BRIDGE_PORT}\n`)
+    process.stderr.write(`prts bot: bridge listening on ${BRIDGE_HOST}:${BRIDGE_PORT}\n`)
   } catch (e) {
     process.stderr.write(`prts bot: bridge port ${BRIDGE_PORT} is in use, so another PRTS bot is already running. Exiting.\n`)
     process.exit(3)

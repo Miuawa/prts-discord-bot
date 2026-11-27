@@ -36,3 +36,6 @@ modules/control/linux/prts-logo.png
 
 # Local machine settings
 .claude/settings.local.json
+
+# Docker: local compose changes (paths, roleplay kit)
+compose.override.yaml

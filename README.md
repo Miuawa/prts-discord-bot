@@ -253,6 +253,8 @@ loginctl enable-linger "$USER"          # optional: keep running while logged ou
   llama.cpp packages ship, which starts without a model on another port. Set `LLAMA_MODEL`
   (and `LLAMA_HOST`, `LLAMA_PORT`) in `.env` first.
   Units of enabled modules (`modules/<name>/linux/systemd/`) are installed too.
+- Prefer containers? [docs/docker.md](docs/docker.md) runs the bot in Docker instead (optional;
+  the narrator and any local model stay on the host).
 - To switch services on and off from the desktop, install the [`control`](modules/control/README.md) module.
 - Watch the narrator: `tmux attach -t prts-narrator` (detach with `Ctrl-b d`).
 - Logs: `journalctl --user -u prts-bot -f`, `logs/narrator.log`.
@@ -350,6 +352,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 - The bridge listens only on 127.0.0.1 and needs the random key in `bridge.key`.
 - Replies can mention users but never `@everyone`, `@here` or roles, whatever text they echo.
 - `/music` plays only public links: addresses on the local machine or network are refused.
+- In Docker the bot runs non-root on a read-only filesystem with no secrets in the image; see
+  [docs/docker.md](docs/docker.md#security).
 - Found a vulnerability? See [SECURITY.md](SECURITY.md).
 - Discord messages reach the AI as untrusted input. The narrator is told never to change
   access, files or settings because a message asked; keep Claude Code's permission prompts on.
