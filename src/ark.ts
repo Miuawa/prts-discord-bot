@@ -1693,7 +1693,8 @@ async function getItems(): Promise<ItemTable> {
 }
 const rarityNum = (r: any) => (typeof r === 'number' ? r + 1 : Number(/(\d+)/.exec(String(r))?.[1] ?? 1))
 // Myrtle's showcase names can arrive as UTF-8 read as Latin-1; undo that when it round-trips cleanly.
-const fixText = (s: string) => {
+const fixText = (s: string | null | undefined) => {
+  if (!s) return ''
   if (!/[Â-Å]/.test(s)) return s
   const t = Buffer.from(s, 'latin1').toString('utf8')
   return t.includes('�') ? s : t
@@ -2010,13 +2011,17 @@ async function cmdMyrtle(i: ChatInputCommandInteraction, eph: boolean) {
     ).catch(() => null)
     if (!en || typeof en.encounteredCount !== 'number') return fail(i, `**${tag(u)}** does not share enemy handbook progress publicly.`)
     const total = en.handbookTotal ?? 0
+    // The raw count includes hidden and duplicate entries (it can pass 100%), so count handbook entries instead.
+    const met = new Set((en.enemies ?? []).filter(x => x.name && x.enemyIndex).map(x => x.enemyIndex)).size || en.encounteredCount
     const e = embed(`${tag(u)} · Enemy handbook`)
       .setURL(`${myrtleUrl(u.uid)}?tab=enemies`)
       .setThumbnail(myrtleAvatar(u.avatar_id))
-      .setDescription(`**${en.encounteredCount}**${total ? ` of **${total}** enemies encountered (**${((en.encounteredCount / total) * 100).toFixed(1)}%**)` : ' enemies encountered'}`)
+      .setDescription(
+        `**${met}**${total ? ` of **${total}** handbook enemies encountered (**${Math.min(100, (met / total) * 100).toFixed(1)}%**)` : ' enemies encountered'}\nAdd \`enemy:\` to check whether they have met a particular enemy.`,
+      )
     const q = (i.options.getString('enemy') ?? '').trim().toLowerCase()
     if (q) {
-      const hits = (en.enemies ?? []).filter(x => fixText(x.name).toLowerCase().includes(q)).sort((a, b) => (a.sortId ?? 0) - (b.sortId ?? 0))
+      const hits = (en.enemies ?? []).filter(x => x.name && fixText(x.name).toLowerCase().includes(q)).sort((a, b) => (a.sortId ?? 0) - (b.sortId ?? 0))
       e.addFields({
         name: `Met, matching "${clip(q, 40)}" (${hits.length})`,
         value: clip(
