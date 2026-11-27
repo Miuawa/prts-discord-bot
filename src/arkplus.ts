@@ -849,7 +849,7 @@ async function infoboxOf(page: string): Promise<{ title: string; box: ReturnType
 
 type EnemyWiki = { enemyPage?: string; character?: string; portrait?: string; note?: string }
 /** Enemies that should show no portrait (Hierda's review, 2026-11-27): the wiki art does not show them. */
-const NO_PORTRAIT = new Set(['enemy_2018_csdoll', 'enemy_2039_syskad']) // Big Sad Lock; Ishar'mla (only a sea scene)
+const NO_PORTRAIT = new Set(['enemy_2018_csdoll']) // Big Sad Lock
 /** Portraits the wiki cannot tell apart (checked by hand): enemy id -> infobox image file. */
 const PORTRAIT_OVERRIDE: Record<string, string> = {
   enemy_2078_skzmst: 'Mon3tr original.png', // Mon2tr is Mon3tr's original form, not the humanoid operator art
@@ -878,6 +878,7 @@ const CHOSEN_PORTRAIT: Record<string, { file: string; page: string; note?: strin
   enemy_1564_mpprts: { file: '60 i16.png', page: 'PRTS', note: 'The PRTS mainframe' }, // PRTS, Source Code (not the logo)
   enemy_2016_csphtm: { file: 'Phantom IS2 Mask.png', page: 'Phantom', note: "Phantom as the 'Blood Diamond'" }, // Lucian
   enemy_1591_mutwin: { file: 'AMa-10.png', page: "Kal'tsit" }, // AMa-10 Isomer: the same boss as AMa-10
+  enemy_2039_syskad: { file: 'Skadi the Corrupting Heart.png', page: 'Skadi the Corrupting Heart', note: 'Shown as Skadi the Corrupting Heart' }, // Ishar'mla (wiki has only a sea scene)
   // The Deathless Black Snake fights in Talulah's body, so show what the player faces.
   enemy_1515_bsnake: { file: 'Talulah (Act I).png', page: 'Talulah', note: "Appears in Talulah's body" },
 }
