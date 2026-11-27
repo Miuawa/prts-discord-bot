@@ -873,7 +873,6 @@ const CHOSEN_PORTRAIT: Record<string, { file: string; page: string; note?: strin
   enemy_1189_krgaxe_2: { file: 'Kjerag Warrior B.png', page: 'Kjerag', note: 'Generic Kjerag story art' }, // Icefield Warrior Leader
   enemy_1193_krgbsk: { file: 'Kjerag Warrior C.png', page: 'Kjerag', note: 'Generic Kjerag story art' }, // Icefield Berserker
   enemy_10124_uashld_2: { file: 'Ursus Shieldguard.png', page: 'Ursus', note: 'Generic Ursus story art' }, // Army Veteran Shieldguard
-  enemy_1111_ucommd: { file: 'Ursine Soldier.png', page: 'Ursus', note: 'Generic Ursus story art' }, // Ursus Raider
   enemy_10043_sailor_2: { file: 'Male Iberian Pirate B.png', page: 'Iberia', note: 'Generic Iberia story art' }, // Risk-surviving Sailor
   enemy_1326_cbagen: { file: 'Columbian Soldier.png', page: 'Columbia', note: 'Generic Columbia story art' }, // Trimounts City Defender
   enemy_1564_mpprts: { file: '60 i16.png', page: 'PRTS', note: 'The PRTS mainframe' }, // PRTS, Source Code (not the logo)
