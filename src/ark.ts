@@ -880,9 +880,19 @@ function loadSheets(): Sheets | null {
   }
   try {
     const fm = readSheetTabs(files[2])
+    // The sheet's Data tab names each material family's tier-3 item ("gas | liquefied high-energy gas"), so new
+    // families get a proper name as soon as the sheet adds them, even while their tab is still "CN Gas Thing".
+    const family = new Map<string, string>()
+    for (const line of [...(fm.get('Data') ?? []), ...(fm.get('import') ?? [])]) {
+      const f = line.split(' | ').map(x => x.trim())
+      if (f.length >= 5 && /^[a-z][a-z ]*$/.test(f[3]) && /^[a-z][a-z0-9 -]+$/.test(f[4])) family.set(f[3], f[4].replace(/\b[a-z]/g, c => c.toUpperCase()).replace(/\bHigh-energy\b/, 'High-Energy'))
+    }
     for (const [tab, lines] of fm) {
       if (!tab.startsWith('• ')) continue
-      const key = tab.slice(2).trim()
+      const raw = tab.slice(2).trim()
+      // "CN Gas Thing" / "CN Power Thing" were placeholders; the sheet now calls them Gas and Electrode.
+      const fam = raw.replace(/^CN\s+|\s+Thing$/gi, '').replace(/^Power$/i, 'Electrode')
+      const key = fam
       const rows: [string, number, number][] = []
       for (const line of lines) {
         const f = line.split(' | ')
@@ -891,7 +901,8 @@ function loadSheets(): Sheets | null {
         const drop = num(f[2])
         if (f.length >= 2 && /^[A-Z0-9]/.test(f[0]) && !isNaN(eff) && f[0] !== 'Stage') rows.push([f[0], eff, isNaN(drop) ? NaN : drop])
       }
-      const label = FARM_ALIAS[key] ? `${FARM_ALIAS[key]} (${key})` : key
+      const full = FARM_ALIAS[key] ?? family.get(key.toLowerCase())
+      const label = full && normName(full) !== normName(key) ? `${full} (${key})` : key
       const shopOnly = lines.some(l => /BUY FROM EVENT SHOPS/i.test(l))
       if (rows.length || shopOnly) s.farm.set(key, { label, rows })
     }
