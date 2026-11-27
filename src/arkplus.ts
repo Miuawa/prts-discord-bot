@@ -1523,7 +1523,7 @@ export function startAnnouncements(client: Client): void {
     await announce(
       client,
       new EmbedBuilder()
-        .setColor(0x23b7e5)
+        .setColor(0xe0383e)
         .setTitle('Operations bulletin')
         .setDescription(clip(posts.join('\n'), 4000))
         .setFooter({ text: 'PRTS · /events schedule for the full list' }),

@@ -52,7 +52,7 @@ const HISTORY_FILE = join(CACHE_DIR, 'music-history.json')
 const PANEL_REFRESH_MS = 15_000
 
 // PRTS look: dark terminal panel, cyan accent, amber for paused, grey for idle.
-const COLOR = { playing: 0x23b7e5, paused: 0xf2a33a, idle: 0x5c6670 }
+const COLOR = { playing: 0xe0383e, paused: 0xf2a33a, idle: 0x5c6670 }
 const AUTHOR = 'PRTS · Audio Playback Module'
 const FOOTER = 'Primitive Rhodes Island Terminal Service · Real-time logging activated'
 

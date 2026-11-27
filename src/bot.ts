@@ -1372,7 +1372,7 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
   }
   const ok = online || CORE_AI.backend !== 'claude-code'
   const e = new EmbedBuilder()
-    .setColor(ok ? 0x23b7e5 : 0xf2a33a)
+    .setColor(ok ? 0xe0383e : 0xf2a33a)
     .setTitle('System status report')
     .setDescription(
       ok
