@@ -55,3 +55,26 @@ export function brand<T>(i: T, section: string | undefined): T {
   }
   return i
 }
+
+// Plain-text /prts answers get a light frame matching the command cards: a small
+// "PRTS · Terminal Interface" line on top and the card footer underneath, both as
+// Discord subtext (-#) so they stay quiet next to the answer.
+export const CHAT_HEADER = '-# PRTS · Terminal Interface'
+export const CHAT_FOOTER = `-# ${FOOTER}`
+/** Room the frame takes in a message, for chunking. */
+export const FRAME_CHARS = CHAT_HEADER.length + CHAT_FOOTER.length + 4
+
+/** Strips a header or footer line the model copied into its text itself. */
+function unframe(text: string): string {
+  return text.replace(/^\s*(?:-#\s*)?PRTS · Terminal Interface\s*\n+/, '').replace(/\n+\s*(?:-#\s*)?Primitive Rhodes Island Terminal Service\s*$/, '')
+}
+/** Adds the header to the first message of an answer and the footer under each reply. */
+export function frameChunks(chunks: string[], first: boolean): string[] {
+  if (!chunks.length) return chunks
+  const out = chunks.map(c => c)
+  out[0] = unframe(out[0])
+  out[out.length - 1] = unframe(out[out.length - 1])
+  if (first) out[0] = `${CHAT_HEADER}\n${out[0]}`
+  out[out.length - 1] = `${out[out.length - 1]}\n${CHAT_FOOTER}`
+  return out
+}

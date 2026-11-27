@@ -42,7 +42,7 @@ import {
 } from 'discord.js'
 import { randomBytes } from 'crypto'
 import { MUSIC_COMMAND, handleMusic, handleMusicButton, handleMusicSelect, handleMusicAutocomplete } from './music.ts'
-import { SECTION, brand } from './theme.ts'
+import { FRAME_CHARS, SECTION, brand, frameChunks } from './theme.ts'
 import { ARK_COMMANDS, ARK_COMMAND_NAMES, handleArk, handleArkAutocomplete, handleArkButton, handleArkSelect, registerHelp, startStoryRefresh } from './ark.ts'
 import { ARKPLUS_COMMANDS, ARKPLUS_NAMES, handleArkPlus, handleArkPlusAutocomplete, handleArkPlusButton, startAnnouncements, startReminders } from './arkplus.ts'
 import { readAiConfig, aiAvailable, apiBackendFor, describeBackend, type AiConfig } from './ai/config.ts'
@@ -285,6 +285,7 @@ type SlashChat = {
   noticed?: boolean // the slow-response notice has been shown
   expiresAt: number
   api?: boolean // answered by an API model rather than the Claude Code narrator
+  framed?: boolean // a PRTS-persona chat (/prts, "Ask PRTS"): replies get the terminal header and footer
 }
 const ephFlag = (on: boolean): MessageFlags.Ephemeral | undefined => (on ? MessageFlags.Ephemeral : undefined)
 
@@ -814,10 +815,11 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<{ c
 
         if (chat_id.startsWith(SLASH_PREFIX)) {
           const s = getSlashChat(chat_id)
+          const parts = s.framed ? frameChunks(chunk(text, limit - FRAME_CHARS, mode), !s.answered) : chunks
           try {
-            for (let i = 0; i < chunks.length; i++) {
+            for (let i = 0; i < parts.length; i++) {
               const payload = {
-                content: chunks[i],
+                content: parts[i],
                 ...(i === 0 && files.length > 0 ? { files } : {}),
               }
               let sent
@@ -831,7 +833,7 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<{ c
             }
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err)
-            throw new Error(`reply failed after ${sentIds.length} of ${chunks.length} chunk(s) sent: ${msg}`)
+            throw new Error(`reply failed after ${sentIds.length} of ${parts.length} chunk(s) sent: ${msg}`)
           }
           const result = sentIds.length === 1 ? `sent (id: ${sentIds[0]})` : `sent ${sentIds.length} parts (ids: ${sentIds.join(', ')})`
           return { content: [{ type: 'text', text: result }] }
@@ -1087,6 +1089,7 @@ async function handleSlash(interaction: ChatInputCommandInteraction | MessageCon
     answered: false,
     expiresAt: Date.now() + SLASH_TTL_MS - 30_000, // small safety margin
     api: apiBackendFor(aiFor(mod), aiOnline()) !== null,
+    framed: !mod && (interaction.isMessageContextMenuCommand() || (interaction.isChatInputCommand() && command === 'prts' && interaction.options.getString('style') !== 'normal')),
   })
 
   // Same shape as messageCreate deliveries, so the model treats it alike.
