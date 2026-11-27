@@ -24,6 +24,7 @@ import { join } from 'path'
 import { findOps, normName, registerHelp } from './ark.ts'
 
 import { COLOR, FOOTER, SECTION, brand, stampEmbeds } from './theme.ts'
+import { type Enemy, parseEnemies, statLines } from './enemy.ts'
 import { CACHE_DIR } from './paths.ts'
 import { announce, announceChannelFor, setAnnounceChannel } from './announce.ts'
 const CACHE_FILE = join(CACHE_DIR, 'arkplus.json')
@@ -31,7 +32,7 @@ const REMIND_FILE = join(CACHE_DIR, 'reminders.json')
 const GAMEDATA = 'https://raw.githubusercontent.com/ArknightsAssets/ArknightsGamedata/master/en/gamedata/excel/'
 const WIKI = 'https://arknights.wiki.gg'
 const UA = 'PRTS-Discord-bot/1.0 (private Arknights fan bot)'
-const DATA_VERSION = 3
+const DATA_VERSION = 5
 const MAX_AGE_MS = 24 * 3600 * 1000
 const log = (s: string) => process.stderr.write(`prts arkplus: ${s}\n`)
 
@@ -72,6 +73,11 @@ export const ARKPLUS_COMMANDS = [
         ],
       },
     ],
+  },
+  {
+    name: 'enemy',
+    description: 'Enemy handbook: stats, abilities and description of an enemy',
+    options: [{ type: 3, name: 'name', description: 'Enemy name, e.g. Patriot or Originium Slug', required: true, max_length: 100, autocomplete: true }, PRIVATE_OPT],
   },
   {
     name: 'stage',
@@ -148,6 +154,15 @@ registerHelp([
     examples: ['/stage name: 4-6', '/stage name: S3-3', '/stage name: Years of Passion'],
   },
   {
+    cmd: 'enemy',
+    group: 'Arknights records',
+    short: "An enemy's stats, abilities and handbook entry",
+    usage: '/enemy name:<enemy>',
+    detail:
+      "Shows an enemy's handbook entry from the EN game data: class (Normal, Elite, Leader), type, attack and damage type, HP, ATK, DEF, RES, attack interval, move speed, range, weight, life points taken, immunities and abilities. If some stages use a stronger version, its changed stats are listed too. Start typing for suggestions.",
+    examples: ['/enemy name: Patriot', '/enemy name: Originium Slug'],
+  },
+  {
     cmd: 'compare',
     group: 'Arknights records',
     short: 'Two operators side by side',
@@ -213,6 +228,7 @@ type Plus = {
   events: { id: string; type: string; name: string; start: number; end: number }[]
   banners: { id: string; name: string; type: string; open: number; end: number; up6?: string[]; up5?: string[] }[]
   chars: Record<string, CharPlus>
+  enemies: Record<string, Enemy>
 }
 let plus: Plus | null = null
 let building: Promise<void> | null = null
@@ -235,7 +251,7 @@ const CLS: Record<string, string> = { PIONEER: 'Vanguard', WARRIOR: 'Guard', TAN
 
 async function buildPlus(): Promise<void> {
   log('building data cache (large download)...')
-  const out: Plus = { version: DATA_VERSION, builtAt: Date.now(), items: {}, stages: [], events: [], banners: [], chars: {} }
+  const out: Plus = { version: DATA_VERSION, builtAt: Date.now(), items: {}, stages: [], events: [], banners: [], chars: {}, enemies: {} }
 
   const it = await getJson('item_table.json')
   for (const [id, v] of Object.entries<any>(it.items ?? {})) out.items[id] = [v.name, tierOf(v.rarity)]
@@ -252,6 +268,14 @@ async function buildPlus(): Promise<void> {
   for (const a of Object.values<any>(act.basicInfo ?? {})) {
     if (!a.displayOnHome) continue
     out.events.push({ id: a.id, type: a.type, name: a.name, start: a.startTime, end: a.endTime })
+  }
+
+  // Enemy handbook text plus battle stats (the stats file lives in levels/, next to excel/).
+  try {
+    const [hb, db] = await Promise.all([getJson('enemy_handbook_table.json'), getJson('../levels/enemydata/enemy_database.json')])
+    out.enemies = parseEnemies(hb, db)
+  } catch (e) {
+    log(`enemy data: ${e}`)
   }
 
   const st = await getJson('stage_table.json')
@@ -692,6 +716,80 @@ async function cmdStage(i: ChatInputCommandInteraction, eph: boolean) {
   await i.reply({ embeds: [e], components: [links], flags: ephFlag(eph) })
 }
 
+// ───────────────────────── /enemy ─────────────────────────
+function findEnemies(q: string): Enemy[] {
+  const list = Object.values(plus?.enemies ?? {})
+  const n = normName(q)
+  if (!n) return list.filter(e => e.level === 'Leader').slice(-25)
+  const exact = list.filter(e => normName(e.name) === n || e.id === q || normName(e.index) === n)
+  const starts = list.filter(e => !exact.includes(e) && normName(e.name).startsWith(n))
+  const has = list.filter(e => !exact.includes(e) && !starts.includes(e) && normName(e.name).includes(n))
+  return [...exact, ...starts, ...has].slice(0, 25)
+}
+
+// Leaders and enemies named like an operator have their enemy page at "<Name>/Enemy" on the wiki;
+// "go" opens that page when it exists and falls back to search results when it does not.
+const enemyWiki = (e: Enemy) => (e.level === 'Leader' || findOps(e.name, 1)[0]?.name === e.name ? `${WIKI}/index.php?search=${encodeURIComponent(`${e.name}/Enemy`)}&go=Go` : wikiUrl(e.name))
+
+function enemyEmbed(e: Enemy): EmbedBuilder {
+  const kind = [e.races.join(', '), e.attack, e.flying ? 'flying' : '', e.damage.length ? `deals ${e.damage.join(' and ')} damage` : ''].filter(Boolean).join(' · ')
+  const em = embed(e.name)
+    .setURL(enemyWiki(e))
+    .setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/enemy/${e.id}.png`)
+    .setDescription([`**${e.level}**${e.index ? ` · \`${e.index}\`` : ''}${kind ? ` · ${kind}` : ''}`, e.desc ? `\n*${clip(e.desc, 600)}*` : ''].filter(Boolean).join('\n'))
+  if (e.note && e.note !== e.desc) em.addFields({ name: 'In battle', value: clip(e.note, 500) })
+  if (e.stats) {
+    const lines = statLines(e.stats)
+    if (e.stronger) {
+      const n = (x: number) => x.toLocaleString('en-US')
+      const names: Record<string, string> = {
+        hp: 'HP',
+        atk: 'ATK',
+        def: 'DEF',
+        res: 'RES',
+        interval: 'Attack interval',
+        speed: 'Move speed',
+        weight: 'Weight',
+        range: 'Range',
+        lifePoints: 'Life points taken',
+        elementalRes: 'Elemental RES',
+      }
+      e.stronger.forEach((lv, k) => {
+        if (Object.keys(lv).length)
+          lines.push(
+            `*Level ${k + 1} (some stages):* ${Object.entries(lv)
+              .map(([key, v]) => `${names[key] ?? key} ${n(v as number)}`)
+              .join(' · ')}`,
+          )
+      })
+    }
+    em.addFields({ name: e.stronger ? 'Stats (level 0)' : 'Stats', value: clip(lines.join('\n'), 1024) })
+  }
+  if (e.abilities.length) em.addFields({ name: 'Abilities', value: clip(e.abilities.map(a => (a.title ? `**${a.text}**` : `• ${a.text}`)).join('\n'), 1024) })
+  if (e.immune.length) em.addFields({ name: 'Immune to (base form)', value: e.immune.join(', ') })
+  return em.setFooter({ text: `${FOOTER} · Enemy handbook, EN game data` })
+}
+
+async function cmdEnemy(i: ChatInputCommandInteraction, eph: boolean) {
+  const p = await need(i, eph)
+  if (!p) return
+  const q = i.options.getString('name', true)
+  const e = p.enemies?.[q] ?? findEnemies(q)[0]
+  if (!e) {
+    await i.reply({
+      embeds: [
+        embed('Record not found')
+          .setColor(COLOR.warn)
+          .setDescription(`No enemy in the handbook matches "${clip(q, 60)}". Please pick a name from the suggestions. I apologize.`),
+      ],
+      flags: ephFlag(eph),
+    })
+    return
+  }
+  const links = new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Wiki').setURL(enemyWiki(e)))
+  await i.reply({ embeds: [enemyEmbed(e)], components: [links], flags: ephFlag(eph) })
+}
+
 // ───────────────────────── /compare ─────────────────────────
 function charOf(p: Plus, q: string): { id: string; c: CharPlus } | null {
   for (const o of findOps(q, 8)) if (p.chars[o.id]) return { id: o.id, c: p.chars[o.id] }
@@ -1055,6 +1153,9 @@ export async function handleArkPlus(i: ChatInputCommandInteraction): Promise<voi
     case 'compare':
       await cmdCompare(i, eph)
       break
+    case 'enemy':
+      await cmdEnemy(i, eph)
+      break
     case 'materials':
       await cmdMaterials(i, eph)
       break
@@ -1071,6 +1172,8 @@ export async function handleArkPlusAutocomplete(i: AutocompleteInteraction): Pro
   let choices: { name: string; value: string }[] = []
   if (i.commandName === 'stage' && f.name === 'name') {
     choices = findStages(q).map(s => ({ name: clip(`${s.code} · ${s.name}${s.diff === 'TOUGH' ? ' (challenge)' : ''} · ${STAGE_TYPE[s.type] ?? s.type}`, 100), value: s.id }))
+  } else if (i.commandName === 'enemy' && f.name === 'name') {
+    choices = findEnemies(q).map(e => ({ name: clip(`${e.name} · ${e.level}${e.index ? ` · ${e.index}` : ''}`, 100), value: e.id }))
   } else if (f.name.startsWith('operator')) {
     choices = findOps(q)
       .slice(0, 25)

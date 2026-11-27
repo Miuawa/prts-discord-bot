@@ -14,7 +14,7 @@ yourself. Extra features, like the roleplay narrator, are optional
 ## Features
 
 - **Arknights tools, no AI needed**: `/operator`, `/skin`, `/tier`, `/farm`,
-  `/recruit`, `/base`, `/events`, `/stage`, `/compare`, `/materials`, `/myrtle`, `/wiki`,
+  `/recruit`, `/base`, `/events`, `/enemy`, `/stage`, `/compare`, `/materials`, `/myrtle`, `/wiki`,
   `/story`, `/help`.
 - **Utilities**: `/roll` (dice like `2d6+3`, `4d6kh3`, `d%`; coin toss; pick an option), `/remind`, `/status`.
 - **Voice**: `/music` (local files, uploads, anything `yt-dlp` plays, lyrics) and `/music voice`

@@ -22,6 +22,7 @@ export const SECTION: Record<string, string> = {
   help: 'Function List',
   events: 'Event Schedule',
   stage: 'Combat Records',
+  enemy: 'Enemy Handbook',
   compare: 'Operator Comparison',
   materials: 'Materials Planning',
   status: 'System Status',
