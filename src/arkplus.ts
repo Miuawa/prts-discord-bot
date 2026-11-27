@@ -848,13 +848,15 @@ async function infoboxOf(page: string): Promise<{ title: string; box: ReturnType
 }
 
 type EnemyWiki = { enemyPage?: string; character?: string; portrait?: string; note?: string }
+/** Enemies that should show no portrait (Hierda's review, 2026-11-27): the wiki art does not show them. */
+const NO_PORTRAIT = new Set(['enemy_2018_csdoll']) // Big Sad Lock
 /** Portraits the wiki cannot tell apart (checked by hand): enemy id -> infobox image file. */
 const PORTRAIT_OVERRIDE: Record<string, string> = {
   enemy_2078_skzmst: 'Mon3tr original.png', // Mon2tr is Mon3tr's original form, not the humanoid operator art
 }
 /** Pictures chosen by hand where the wiki has no link (checked against the enemy icon): enemy id ->
  * wiki file, the page the button opens, and a note for the footer. They win over the automatic lookup. */
-const CHOSEN_PORTRAIT: Record<string, { file: string; page: string; note: string }> = {
+const CHOSEN_PORTRAIT: Record<string, { file: string; page: string; note?: string }> = {
   enemy_1002_nsabr: { file: 'Reunion Soldier A.png', page: 'Reunion', note: 'Generic Reunion story art' }, // Soldier
   enemy_1011_wizard: { file: 'Reunion Caster.png', page: 'Reunion', note: 'Generic Reunion story art' }, // Caster
   enemy_1189_krgaxe: { file: 'Kjerag Warrior A.png', page: 'Kjerag', note: 'Generic Kjerag story art' }, // Icefield Warrior
@@ -864,6 +866,19 @@ const CHOSEN_PORTRAIT: Record<string, { file: string; page: string; note: string
   enemy_1055_ganman: { file: 'Mafioso.png', page: 'Siracusa', note: 'Generic Siracusa story art' }, // Sicilian
   enemy_1277_sgman: { file: 'Siracusan Mafioso A.png', page: 'Siracusa', note: 'Generic Siracusa story art' }, // Famiglia Soldier
   enemy_10043_sailor: { file: 'Male Iberian Pirate A.png', page: 'Iberia', note: 'Generic Iberia story art' }, // Risk-seeking Sailor
+  // Approved by Hierda from the review sheet (2026-11-27).
+  enemy_1099_nbkght: { file: 'Kazimierzian Knight A.png', page: 'Kazimierz', note: 'Generic Kazimierz story art' }, // Nameless Independent Knight
+  enemy_1099_nbkght_2: { file: 'Kazimierzian Knight C.png', page: 'Kazimierz', note: 'Generic Kazimierz story art' }, // Nameless Elite Knight
+  enemy_1057_gansho: { file: 'Mafioso unarmed.png', page: 'Siracusa', note: 'Generic Siracusa story art' }, // Marksman
+  enemy_1189_krgaxe_2: { file: 'Kjerag Warrior B.png', page: 'Kjerag', note: 'Generic Kjerag story art' }, // Icefield Warrior Leader
+  enemy_1193_krgbsk: { file: 'Kjerag Warrior C.png', page: 'Kjerag', note: 'Generic Kjerag story art' }, // Icefield Berserker
+  enemy_10124_uashld_2: { file: 'Ursus Shieldguard.png', page: 'Ursus', note: 'Generic Ursus story art' }, // Army Veteran Shieldguard
+  enemy_1111_ucommd: { file: 'Ursine Soldier.png', page: 'Ursus', note: 'Generic Ursus story art' }, // Ursus Raider
+  enemy_10043_sailor_2: { file: 'Male Iberian Pirate B.png', page: 'Iberia', note: 'Generic Iberia story art' }, // Risk-surviving Sailor
+  enemy_1326_cbagen: { file: 'Columbian Soldier.png', page: 'Columbia', note: 'Generic Columbia story art' }, // Trimounts City Defender
+  enemy_1564_mpprts: { file: '60 i16.png', page: 'PRTS', note: 'The PRTS mainframe' }, // PRTS, Source Code (not the logo)
+  enemy_2016_csphtm: { file: 'Phantom IS2 Mask.png', page: 'Phantom', note: "Phantom as the 'Blood Diamond'" }, // Lucian
+  enemy_1591_mutwin: { file: 'AMa-10.png', page: "Kal'tsit" }, // AMa-10 Isomer: the same boss as AMa-10
   // The Deathless Black Snake fights in Talulah's body, so show what the player faces.
   enemy_1515_bsnake: { file: 'Talulah (Act I).png', page: 'Talulah', note: "Appears in Talulah's body" },
 }
@@ -923,7 +938,7 @@ export async function enemyWiki(e: Enemy): Promise<EnemyWiki> {
           value.character = cb.title.replace(/\/Story$/, '')
         }
       }
-      if (file) value.portrait = await fileUrl(file.trim())
+      if (file && !NO_PORTRAIT.has(e.id)) value.portrait = await fileUrl(file.trim())
       if (!value.portrait) value.character = undefined
       break
     }
