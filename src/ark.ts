@@ -270,7 +270,7 @@ export const ARK_COMMANDS = [
         options: [
           { type: 3, name: 'player', description: 'Name, Name#1234, UID or myrtle.moe link (default: your linked account)', required: false, autocomplete: true, max_length: 100 },
           { type: 6, name: 'user', description: 'A Discord user who linked their account', required: false },
-          { type: 3, name: 'enemy', description: 'Check whether they have met enemies whose name contains this', required: false, max_length: 60 },
+          { type: 3, name: 'enemy', description: 'Check whether they have met enemies whose name contains this', required: false, max_length: 60, autocomplete: true },
           PRIVATE_OPT,
         ],
       },

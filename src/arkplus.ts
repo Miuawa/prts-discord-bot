@@ -1172,6 +1172,12 @@ export async function handleArkPlusAutocomplete(i: AutocompleteInteraction): Pro
   let choices: { name: string; value: string }[] = []
   if (i.commandName === 'stage' && f.name === 'name') {
     choices = findStages(q).map(s => ({ name: clip(`${s.code} · ${s.name}${s.diff === 'TOUGH' ? ' (challenge)' : ''} · ${STAGE_TYPE[s.type] ?? s.type}`, 100), value: s.id }))
+  } else if (i.commandName === 'myrtle' && f.name === 'enemy') {
+    // A name filter, so suggest each name once.
+    const seen = new Set<string>()
+    choices = findEnemies(q)
+      .filter(e => !seen.has(e.name) && seen.add(e.name))
+      .map(e => ({ name: clip(`${e.name} · ${e.level}`, 100), value: clip(e.name, 60) }))
   } else if (i.commandName === 'enemy' && f.name === 'name') {
     choices = findEnemies(q).map(e => ({ name: clip(`${e.name} · ${e.level}${e.index ? ` · ${e.index}` : ''}`, 100), value: e.id }))
   } else if (f.name.startsWith('operator')) {

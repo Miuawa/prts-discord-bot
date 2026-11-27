@@ -1122,7 +1122,8 @@ client.on('interactionCreate', async (interaction: Interaction) => {
       await handleMusicAutocomplete(interaction).catch(() => {})
       return
     }
-    if (ARKPLUS_NAMES.has(interaction.commandName)) {
+    // /myrtle enemies suggests names from the enemy handbook, which arkplus keeps.
+    if (ARKPLUS_NAMES.has(interaction.commandName) || (interaction.commandName === 'myrtle' && interaction.options.getFocused(true).name === 'enemy')) {
       await handleArkPlusAutocomplete(interaction).catch(() => {})
       return
     }
