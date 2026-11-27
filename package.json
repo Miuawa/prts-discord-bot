@@ -1,6 +1,6 @@
 {
   "name": "prts-discord-bot",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "description": "Unofficial Arknights-themed Discord bot with a Claude Code narrator bridge",
   "license": "Apache-2.0",

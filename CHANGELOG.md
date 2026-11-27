@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.2 (2026-11-28)
+## 0.2.3 (2026-11-28)
 
 ### New
 - Nightly backups: `linux/backup.sh` with `prts-backup.timer` (03:30) saves `.env`, `cache/` and the
@@ -12,6 +12,8 @@
 
 ### Security
 - The bridge key is compared in constant time.
+
+## 0.2.2 (2026-11-28)
 
 ### Changed
 - `src/ark.ts` (about 2,900 lines) is split into one file per command under `src/ark/` (`roll`, `operator`,
