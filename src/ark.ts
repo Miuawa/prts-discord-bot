@@ -1076,7 +1076,7 @@ function moduleCardText(m: OpModule, r?: string[]): string {
   return out.join('\n') || 'No effect data yet.'
 }
 
-/** The /operator card, also opened by the alternate-version buttons (`ark:op:<id>`). */
+/** The /operator card (also served by `ark:op:<id>`). */
 function operatorCard(o: Op): { embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder>[] } {
   const sh = loadSheets()
   const e = embed(o.name)
@@ -1119,24 +1119,13 @@ function operatorCard(o: Op): { embeds: EmbedBuilder[]; components: ActionRowBui
   e.setFooter({ text: `${FOOTER} · Press a button below for details · Tier and module ratings are fan-made` })
   const components = [
     new ActionRowBuilder<ButtonBuilder>().addComponents(
-      ...(o.modules.length ? [new ButtonBuilder().setCustomId(`ark:mod:${o.id}`).setStyle(ButtonStyle.Primary).setLabel('Modules').setEmoji('🔧')] : []),
-      new ButtonBuilder().setCustomId(`ark:skin:${o.id}`).setStyle(ButtonStyle.Secondary).setLabel('Outfits').setEmoji('👗'),
-      new ButtonBuilder().setCustomId(`ark:base:${o.id}`).setStyle(ButtonStyle.Secondary).setLabel('Base skills').setEmoji('🏭'),
-      new ButtonBuilder().setCustomId(`arkp:mat:${o.id}:everything`).setStyle(ButtonStyle.Secondary).setLabel('Materials').setEmoji('📦'),
+      ...(o.modules.length ? [new ButtonBuilder().setCustomId(`ark:mod:${o.id}`).setStyle(ButtonStyle.Primary).setLabel('Modules')] : []),
+      new ButtonBuilder().setCustomId(`ark:skin:${o.id}`).setStyle(ButtonStyle.Secondary).setLabel('Outfits'),
+      new ButtonBuilder().setCustomId(`ark:base:${o.id}`).setStyle(ButtonStyle.Secondary).setLabel('Base skills'),
+      new ButtonBuilder().setCustomId(`arkp:mat:${o.id}:everything`).setStyle(ButtonStyle.Secondary).setLabel('Materials'),
     ),
     opLinkRow(o),
   ]
-  if (alts.length)
-    components.push(
-      new ActionRowBuilder<ButtonBuilder>().addComponents(
-        alts.slice(0, 5).map(a =>
-          new ButtonBuilder()
-            .setCustomId(`ark:op:${a.id}`)
-            .setStyle(ButtonStyle.Secondary)
-            .setLabel(clip(`Open ${a.name}`, 80)),
-        ),
-      ),
-    )
   return { embeds: [e], components }
 }
 
@@ -1217,7 +1206,7 @@ function moduleDetailEmbed(o: Op): EmbedBuilder {
     .setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${o.id}.png`)
     .setDescription(`Optional upgrades unlocked at ${o.modules[0]?.unlock ?? 'Elite 2'}. Stage 1 changes the class trait and adds stats; stages 2 and 3 improve a talent.`)
     .setFooter({ text: `${FOOTER} · Effects from EN game data · Verdicts from DragonGJY's module ratings (fan-made, CN-based)` })
-  for (const m of o.modules.slice(0, 6)) e.addFields({ name: `🔧 ${m.type} · ${m.name}${m.form ? ` (${m.form})` : ''}`, value: clip(moduleCardText(m, ratingRow(m, rated)), 1024) })
+  for (const m of o.modules.slice(0, 6)) e.addFields({ name: `${m.type} · ${m.name}${m.form ? ` (${m.form})` : ''}`, value: clip(moduleCardText(m, ratingRow(m, rated)), 1024) })
   return e
 }
 
@@ -1243,7 +1232,7 @@ function moduleEmbed(o: Op): EmbedBuilder {
       const verdict = [gradeWord(mr) && `Rating: ${gradeWord(mr)}`, gradeWord(ic) && `Value for materials: ${gradeWord(ic)}`, gradeWord(pri) && `Priority: ${gradeWord(pri)}`].filter(Boolean)
       const rec = recLevel(lv)
       e.addFields({
-        name: `🔧 Module ${mod.trim()} · ${arch.trim()}`,
+        name: `Module ${mod.trim()} · ${arch.trim()}`,
         value: clip([`*${quick.trim()}*`, verdict.join(' · '), rec ? `Recommended: ${rec}` : '', `**Pros**\n${bullets(pros)}`, `**Cons**\n${bullets(cons)}`].filter(Boolean).join('\n'), 1024),
       })
     }
@@ -2407,7 +2396,7 @@ const HELP: HelpEntry[] = [
     short: 'Operator card: class, faction, tier, modules, art, links',
     usage: '/operator name:<operator>',
     detail:
-      'Shows a compact card like the wiki infobox: rarity, class, branch, position, faction, trait, summons, tags, how to get them, tier (AK Tier List), alternate versions (with a button to open them), their modules with a rating, and E2 art. Buttons open the details privately: **Modules** (what each module does in plain words, its stats, and the DragonGJY verdict, with a further button for pros and cons), **Outfits** (like /skin) and **Base skills** (like /base), plus links to the wiki, Myrtle, story records and voice lines. Names autocomplete as you type. For non-operators (NPCs) it shows a wiki summary and their story appearances.',
+      'Shows a compact card like the wiki infobox: rarity, class, branch, position, faction, trait, summons, tags, how to get them, tier (AK Tier List), alternate versions, their modules with a rating, and E2 art. Buttons open the details privately: **Modules** (what each module does in plain words, its stats, and the DragonGJY verdict, with a further button for pros and cons), **Outfits** (like /skin) and **Base skills** (like /base), plus links to the wiki, Myrtle, story records and voice lines. Names autocomplete as you type. For non-operators (NPCs) it shows a wiki summary and their story appearances.',
     examples: ['/operator name: Texas', '/operator name: Wang'],
   },
   {

@@ -3,7 +3,7 @@
 ## Unreleased
 
 - `/operator` profile reads like the wiki infobox: class, branch, position, faction, trait, summons,
-  tags, how to get, tier and alternate versions (with an Open button), plus Amiya's forms.
+  tags, how to get, tier and alternate versions, plus Amiya's forms.
 - One PRTS look for every reply: a "PRTS · <module>" header (Operator Archives, Combat Records,
   Materials Planning, ...), the same colours and footer, and fewer emoji. No more narrow
   three-column fields (`/stage`, `/compare`, `/skin`, `/myrtle`, `/base`, the music panel).
