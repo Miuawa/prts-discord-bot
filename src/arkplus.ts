@@ -916,7 +916,7 @@ async function infoboxOf(page: string): Promise<{ title: string; box: ReturnType
 }
 
 type EnemyWiki = { enemyPage?: string; character?: string; portrait?: string; note?: string }
-/** Enemies that should show no portrait (Hierda's review, 2026-11-27): the wiki art does not show them. */
+/** Enemies that should show no portrait (maintainer's review, 2026-11-27): the wiki art does not show them. */
 const NO_PORTRAIT = new Set(['enemy_2018_csdoll']) // Big Sad Lock
 /** Portraits the wiki cannot tell apart (checked by hand): enemy id -> infobox image file. */
 const PORTRAIT_OVERRIDE: Record<string, string> = {
@@ -934,7 +934,7 @@ const CHOSEN_PORTRAIT: Record<string, { file: string; page: string; note?: strin
   enemy_1055_ganman: { file: 'Mafioso.png', page: 'Siracusa', note: 'Generic Siracusa story art' }, // Sicilian
   enemy_1277_sgman: { file: 'Siracusan Mafioso A.png', page: 'Siracusa', note: 'Generic Siracusa story art' }, // Famiglia Soldier
   enemy_10043_sailor: { file: 'Male Iberian Pirate A.png', page: 'Iberia', note: 'Generic Iberia story art' }, // Risk-seeking Sailor
-  // Approved by Hierda from the review sheet (2026-11-27).
+  // Approved in the maintainer's review sheet (2026-11-27).
   enemy_1099_nbkght: { file: 'Kazimierzian Knight A.png', page: 'Kazimierz', note: 'Generic Kazimierz story art' }, // Nameless Independent Knight
   enemy_1099_nbkght_2: { file: 'Kazimierzian Knight C.png', page: 'Kazimierz', note: 'Generic Kazimierz story art' }, // Nameless Elite Knight
   enemy_1057_gansho: { file: 'Mafioso unarmed.png', page: 'Siracusa', note: 'Generic Siracusa story art' }, // Marksman
@@ -946,7 +946,7 @@ const CHOSEN_PORTRAIT: Record<string, { file: string; page: string; note?: strin
   enemy_1564_mpprts: { file: '60 i16.png', page: 'PRTS', note: 'The PRTS mainframe' }, // PRTS, Source Code (not the logo)
   enemy_2016_csphtm: { file: 'Phantom IS2 Mask.png', page: 'Phantom', note: "Phantom as the 'Blood Diamond'" }, // Lucian
   enemy_1591_mutwin: { file: 'AMa-10.png', page: "Kal'tsit" }, // AMa-10 Isomer: the same boss as AMa-10
-  // Sui and its claws: a story scene of Sui instead of its emblem (Hierda's pick).
+  // Sui and its claws: a story scene of Sui instead of its emblem (maintainer's pick).
   enemy_1582_suisho: { file: '70 i07.png', page: 'Sui' },
   enemy_1583_suizzh: { file: '70 i07.png', page: 'Sui' },
   enemy_1584_suiyzh: { file: '70 i07.png', page: 'Sui' },
@@ -1020,7 +1020,7 @@ export async function enemyWiki(e: Enemy): Promise<EnemyWiki> {
       value.portrait = await fileUrl(chosen.file)
       if (value.portrait) Object.assign(value, { character: chosen.page, note: chosen.note })
     }
-    // A variant with no picture of its own (enemy_1277_sgman_2) falls back to its base enemy's (Hierda, 2026-11-27).
+    // A variant with no picture of its own (enemy_1277_sgman_2) falls back to its base enemy's (maintainer's review, 2026-11-27).
     const baseId = e.id.replace(/_\d+$/, '')
     const base = baseId !== e.id ? plus?.enemies?.[baseId] : undefined
     if (!value.portrait && base && !NO_PORTRAIT.has(e.id)) {
