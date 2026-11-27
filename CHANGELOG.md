@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `/operator` is easier to read: no squeezed three-column fields, and each module gets its own
+  full-width section with what it does in plain words (stage 1 trait change, stats, the talent
+  stages 2 and 3 improve, from the EN game data) and the DragonGJY rating and recommended stage
+  spelled out. The "Module pros and cons" button lists pros and cons as bullets.
 - Fewer commands: `/coin` and `/choose` are now `/roll coin` and `/roll choose` (dice is `/roll dice`);
   `/module` became the "Module pros and cons" button on `/operator`; `/links` is `/help command: links`;
   `/voice` is `/music voice`.

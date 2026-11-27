@@ -34,6 +34,7 @@ const SHEETS = join(DATA_DIR, 'sheets')
 const STORIES_JSON = process.env.PRTS_STORIES_JSON ?? join(DATA_DIR, 'stories.json')
 import { CACHE_DIR, DATA_DIR } from './paths.ts'
 import { announce } from './announce.ts'
+import { type ModuleEffect, parseModule, statLine, gradeWord, recLevel } from './equip.ts'
 const CACHE_FILE = join(CACHE_DIR, 'arkdata.json')
 const CACHE_MAX_AGE_MS = 3 * 24 * 3600 * 1000
 const GAMEDATA = 'https://raw.githubusercontent.com/ArknightsAssets/ArknightsGamedata/master/en/gamedata/excel/'
@@ -354,11 +355,13 @@ type Op = {
   tags: string[]
   usage: string
   desc: string
-  modules: { name: string; type: string; id?: string }[]
+  modules: OpModule[]
   recruit: boolean
   base: { name: string; room: string; unlock: string; desc: string }[]
 }
-const DATA_VERSION = 3
+/** A module from uniequip_table, with its effects from battle_equip_table when known. */
+type OpModule = { name: string; type: string; id?: string; unlock?: string; form?: string; fx?: ModuleEffect }
+const DATA_VERSION = 6
 type ArkData = {
   version: number
   builtAt: number
@@ -395,9 +398,11 @@ export const normName = (s: string) =>
 
 async function buildData(): Promise<void> {
   log('building game data cache...')
-  const [chars, equip, teams, gacha, routes, building] = await Promise.all([
+  const [chars, equip, battleEquip, patch, teams, gacha, routes, building] = await Promise.all([
     getJson(GAMEDATA + 'character_table.json'),
     getJson(GAMEDATA + 'uniequip_table.json'),
+    getJson(GAMEDATA + 'battle_equip_table.json').catch(e => (log(`battle_equip_table: ${e}`), {})),
+    getJson(GAMEDATA + 'char_patch_table.json').catch(() => ({ patchChars: {} })),
     getJson(GAMEDATA + 'handbook_team_table.json'),
     getJson(GAMEDATA + 'gacha_table.json'),
     getJson(TIMO + '/json/routes.json').catch(() => ({ groups: {}, ops: {} })),
@@ -428,11 +433,26 @@ async function buildData(): Promise<void> {
     return out
   }
   const sub = equip.subProfDict ?? {}
-  const modsByChar: Record<string, { name: string; type: string; id?: string }[]> = {}
+  const modsByChar: Record<string, (OpModule & { order: number })[]> = {}
   for (const e of Object.values<any>(equip.equipDict ?? {})) {
     if (!e.charId || e.typeName1 === 'ORIGINAL') continue
-    ;(modsByChar[e.charId] ??= []).push({ name: e.uniEquipName, type: `${e.typeName1}-${e.typeName2}`, id: e.uniEquipId })
+    const fx = parseModule(battleEquip[e.uniEquipId]) ?? undefined
+    const ph = /\d/.exec(e.unlockEvolvePhase ?? '')?.[0]
+    const unlock = ph ? `Elite ${ph}, Lv. ${e.unlockLevel ?? 1}` : fx?.unlock
+    // Amiya's Guard and Medic forms keep their modules under the base Amiya (tmplId names the form).
+    const tmpl = e.tmplId && e.tmplId !== e.charId ? (patch.patchChars?.[e.tmplId] ?? chars[e.tmplId]) : null
+    const form = tmpl ? `${CLASS[tmpl.profession] ?? sub[tmpl.subProfessionId]?.subProfessionName ?? 'other'} form` : undefined
+    ;(modsByChar[e.charId] ??= []).push({
+      name: e.uniEquipName,
+      type: `${e.typeName1}-${e.typeName2}`,
+      id: e.uniEquipId,
+      unlock,
+      form,
+      fx,
+      order: (form ? 100 : 0) + (e.charEquipOrder ?? 9),
+    })
   }
+  for (const list of Object.values(modsByChar)) list.sort((a, b) => a.order - b.order)
   // Recruitable pool, from the in-game "All Possible Operators" text.
   const pool = new Set<string>()
   for (const line of String(gacha.recruitDetail ?? '').split('\n')) {
@@ -999,6 +1019,22 @@ function tierText(o: Op, sh: Sheets | null): string | null {
   return t?.length ? t.join(', ') : null
 }
 
+/** One module on the /operator card: what it does, its stats, and the community rating in words. */
+function moduleCardText(m: OpModule, r?: string[]): string {
+  const out: string[] = []
+  const fx = m.fx
+  if (fx?.trait) out.push(`**Stage 1, ${fx.trait.kind === 'add' ? 'trait bonus' : 'new trait'}:** ${clip(fx.trait.text, 300)}`)
+  const st = fx ? statLine(fx.stats) : ''
+  if (st) out.push(`**Stats (stage 1 → ${fx?.stats.length ?? 3}):** ${st}`)
+  for (const t of fx?.talents ?? []) out.push(`**Stages 2–3, talent "${t.name}":** ${clip(t.text, 420)}`)
+  if (!fx && r?.[3]) out.push(clip(r[3], 300))
+  if (r) {
+    const bits = [gradeWord(r[4]) && `rated ${gradeWord(r[4])}`, gradeWord(r[5]) && `value for materials ${gradeWord(r[5])}`, recLevel(r[6])].filter(Boolean)
+    if (bits.length) out.push(`**Community verdict:** ${bits.join(' · ')}`)
+  }
+  return out.join('\n') || 'No effect data yet.'
+}
+
 async function cmdOperator(i: ChatInputCommandInteraction, eph: boolean) {
   ensureData()
   const q = i.options.getString('name', true)
@@ -1029,19 +1065,31 @@ async function cmdOperator(i: ChatInputCommandInteraction, eph: boolean) {
     .setThumbnail(`https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/avatar/${o.id}.png`)
     .setImage(`https://assets.eltik.net/myrtle/en/textures/chararts/${o.id}/${o.id}_${o.rarity >= 3 ? 2 : 1}.png`)
   const tier = tierText(o, sh)
-  e.addFields({ name: 'Tier (AK Tier List)', value: tier ?? 'Not listed', inline: true })
-  e.addFields({ name: 'Recruitment', value: o.recruit ? 'Available' : 'Headhunting/other only', inline: true })
-  if (o.tags.length) e.addFields({ name: 'Tags', value: o.tags.join(', '), inline: true })
+  e.addFields({
+    name: 'Profile',
+    value: [
+      `**Tier:** ${tier ?? 'not listed'} *(AK Tier List)*`,
+      `**Recruitment:** ${o.recruit ? 'can be found with recruitment permits' : 'not in the recruitment pool (headhunting, events or the shop)'}`,
+      o.tags.length ? `**Tags:** ${o.tags.join(', ')}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  })
   const rated = sh?.modules.get(normName(o.name)) ?? []
-  if (o.modules.length || rated.length) {
-    const lines = o.modules.map(m => {
-      const r = rated.find(row => m.type.endsWith('-' + row[2].trim()))
-      return `**${m.type}** ${m.name}${r ? ` · MR ${r[4]} / IC ${r[5]} · ${r[6]}` : ''}`
+  if (o.modules.length) {
+    e.addFields({
+      name: `Modules (${o.modules.length})`,
+      value: `Optional upgrades unlocked at ${o.modules[0].unlock ?? 'Elite 2'}. Stage 1 changes the class trait and adds stats; stages 2 and 3 improve a talent.`,
     })
-    e.addFields({ name: 'Modules', value: clip(lines.join('\n') || rated.map(r => `${r[2]}: MR ${r[4]}`).join('\n'), 1024) })
+    for (const m of o.modules.slice(0, 4)) {
+      const r = rated.find(row => m.type.endsWith('-' + row[2].trim()))
+      e.addFields({ name: `🔧 ${m.type} · ${m.name}${m.form ? ` (${m.form})` : ''}`, value: clip(moduleCardText(m, r), 1024) })
+    }
+  } else if (rated.length) {
+    e.addFields({ name: 'Modules', value: clip(rated.map(r => `**Module ${r[2].trim()}:** ${clip(r[3], 200)}`).join('\n'), 1024) })
   }
   e.addFields({ name: 'Links', value: opLinks(o) })
-  e.setFooter({ text: `${FOOTER} · Tier/module ratings are fan-made community sheets` })
+  e.setFooter({ text: `${FOOTER} · Module effects from EN game data · Tier and module ratings are fan-made (AK Tier List, DragonGJY)` })
   const components = rated.length
     ? [new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(`ark:mod:${o.id}`).setStyle(ButtonStyle.Secondary).setLabel('Module pros and cons'))]
     : []
@@ -1104,12 +1152,21 @@ function moduleEmbed(o: Op): EmbedBuilder {
     const mods = o.modules.map(m => `**${m.type}** ${m.name}`).join('\n')
     e.setDescription(`No rating found in the module sheet.${mods ? `\n\nModules in game data:\n${mods}` : ''}`).setColor(COLOR.dim)
   } else {
-    e.setDescription('MR = module rating, IC = investment cost-efficiency, Rec. LV = recommended module level.')
+    e.setDescription("One player's ratings of every module, written for the CN server, so treat them as a guide. Grades go S (best), A, B, C.")
+    const bullets = (t: string) =>
+      (t ?? '')
+        .split(/(?:^|\s)-\s+/)
+        .map(x => x.trim())
+        .filter(Boolean)
+        .map(x => `• ${x}`)
+        .join('\n')
     for (const r of rows.slice(0, 6)) {
       const [, arch, mod, quick, mr, ic, lv, pri, pros, cons] = r
+      const verdict = [gradeWord(mr) && `Rating: ${gradeWord(mr)}`, gradeWord(ic) && `Value for materials: ${gradeWord(ic)}`, gradeWord(pri) && `Priority: ${gradeWord(pri)}`].filter(Boolean)
+      const rec = recLevel(lv)
       e.addFields({
-        name: `${mod.trim()} module (${arch}) · MR ${mr} · IC ${ic} · ${lv} · Priority ${pri}`,
-        value: clip(`${quick}\n**Pros:** ${pros}\n**Cons:** ${cons}`, 1024),
+        name: `🔧 Module ${mod.trim()} · ${arch.trim()}`,
+        value: clip([`*${quick.trim()}*`, verdict.join(' · '), rec ? `Recommended: ${rec}` : '', `**Pros**\n${bullets(pros)}`, `**Cons**\n${bullets(cons)}`].filter(Boolean).join('\n'), 1024),
       })
     }
   }
@@ -2179,7 +2236,7 @@ const HELP: HelpEntry[] = [
     short: 'Operator card: class, faction, tier, modules, art, links',
     usage: '/operator name:<operator>',
     detail:
-      'Shows rarity, class and branch, faction, position, tags, tier (AK Tier List), modules with DragonGJY ratings, whether they can be recruited, E2 art, and links to the wiki, Myrtle, story records and voice lines. The "Module pros and cons" button shows the full DragonGJY notes (recommended level, priority, pros and cons) privately. Names autocomplete as you type. For non-operators (NPCs) it shows a wiki summary and their story appearances.',
+      'Shows rarity, class and branch, faction, position, tags, tier (AK Tier List), whether they can be recruited, each module in plain words (what stage 1 changes, its stats, the talent stages 2 and 3 improve, and the DragonGJY rating and recommended stage), E2 art, and links to the wiki, Myrtle, story records and voice lines. The "Module pros and cons" button shows the full DragonGJY notes (recommended level, priority, pros and cons) privately. Names autocomplete as you type. For non-operators (NPCs) it shows a wiki summary and their story appearances.',
     examples: ['/operator name: Texas', '/operator name: Wang'],
   },
   {
